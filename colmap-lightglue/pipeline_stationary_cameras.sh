@@ -22,6 +22,12 @@ set -e  # Exit on error
 # CONFIGURATION - Adjust these as needed
 # ============================================================================
 
+# container setup to use the colmap in the apptainer
+CONTAINER="/cluster/research-groups/wehrwein/zoo/containers/colmap.sif"
+colmap() {
+    apptainer exec --nv "$CONTAINER" colmap "$@"
+}
+
 # Feature extraction settings
 HANDHELD_MAX_FEATURES=5000        # Features per handheld image
 STATIONARY_MAX_FEATURES=16384      # Features per stationary image
@@ -119,7 +125,7 @@ colmap feature_extractor \
     --SiftExtraction.max_num_features $STATIONARY_MAX_FEATURES \
     --SiftExtraction.first_octave -1 \
     --SiftExtraction.num_octaves 6 \
-    --SiftExtraction.estimate_affine_shape 1 \  # handles perspective distortion better, important for elevated views
+    --SiftExtraction.estimate_affine_shape 1 \  # handles perspective better
     --SiftExtraction.domain_size_pooling 1 \
     --SiftExtraction.dsp_min_scale 0.1 \
     --SiftExtraction.dsp_max_scale 4.0 \
@@ -145,7 +151,7 @@ MULTISCALE_FLAG=""
 if [ "$LIGHTGLUE_MULTISCALE" = true ]; then
     MULTISCALE_FLAG="--multiscale --scales 0.5,1.0,2.0"
 fi
-python3 "$SCRIPT_DIR/lightglue_match.py" \
+apptainer exec --nv "$CONTAINER" python3 "$SCRIPT_DIR/lightglue_match.py" \
     --database_path "$DATABASE_PATH" \
     --stationary_dir "$STATIONARY_DIR" \
     --handheld_dir "$HANDHELD_DIR" \
