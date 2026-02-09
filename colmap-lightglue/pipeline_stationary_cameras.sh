@@ -24,7 +24,7 @@ set -e  # Exit on error
 
 # Feature extraction settings
 HANDHELD_MAX_FEATURES=5000        # Features per handheld image
-STATIONARY_MAX_FEATURES=8192      # Features per stationary image
+STATIONARY_MAX_FEATURES=16384      # Features per stationary image
 
 # LightGlue matching settings
 LIGHTGLUE_MAX_KEYPOINT_DIST=10    # Max distance to match LightGlue point to SIFT keypoint
@@ -36,7 +36,7 @@ LIGHTGLUE_MULTISCALE=true         # Enable multi-scale extraction for stationary
 # COLMAP mapper settings (relaxed for difficult matching)
 MAPPER_MIN_NUM_MATCHES=10
 MAPPER_INIT_MIN_NUM_INLIERS=15
-MAPPER_ABS_POSE_MIN_INLIERS=5
+MAPPER_ABS_POSE_MIN_INLIERS=12
 MAPPER_ABS_POSE_MIN_INLIER_RATIO=0.05
 MAPPER_TRI_MIN_ANGLE=0.5
 
@@ -119,10 +119,12 @@ colmap feature_extractor \
     --SiftExtraction.max_num_features $STATIONARY_MAX_FEATURES \
     --SiftExtraction.first_octave -1 \
     --SiftExtraction.num_octaves 6 \
-    --SiftExtraction.estimate_affine_shape 1 \
+    --SiftExtraction.estimate_affine_shape 1 \  # handles perspective distortion better, important for elevated views
     --SiftExtraction.domain_size_pooling 1 \
     --SiftExtraction.dsp_min_scale 0.1 \
-    --SiftExtraction.dsp_max_scale 4.0
+    --SiftExtraction.dsp_max_scale 4.0 \
+    --ImageReader.single_camera 1 \
+    --ImageReader.default_focal_length_factor 1.2 # Typical for security cams
 
 # ============================================================================
 # STEP 4: Match handheld images with COLMAP
@@ -188,6 +190,27 @@ colmap image_registrator \
     --Mapper.abs_pose_min_num_inliers $MAPPER_ABS_POSE_MIN_INLIERS \
     --Mapper.abs_pose_min_inlier_ratio $MAPPER_ABS_POSE_MIN_INLIER_RATIO
 
+# Add this after Step 7
+# Triangulate additional points using the registered stationary camera poses
+# This fills in gaps in the 3D point cloud by computing 3D points from matched features
+colmap point_triangulator \
+    --database_path "$DATABASE_PATH" \
+    --image_path "$PROJECT_DIR" \
+    --input_path "$SPARSE_DIR/final" \
+    --output_path "$SPARSE_DIR/final"
+
+# Refine the reconstruction through bundle adjustment
+# Optimizes camera poses and 3D point positions to minimize reprojection error
+# Also refines focal length and lens distortion parameters for better accuracy
+colmap bundle_adjuster \
+    --input_path "$SPARSE_DIR/final" \
+    --output_path "$SPARSE_DIR/final_optimized" \
+    --BundleAdjustment.refine_focal_length 1 \
+    --BundleAdjustment.refine_extra_params 1 \
+    --BundleAdjustment.refine_extrinsics 1
+
+
+
 # ============================================================================
 # DONE
 # ============================================================================
@@ -197,7 +220,7 @@ echo "==========================================================================
 echo "Pipeline complete!"
 echo "============================================================================"
 echo ""
-colmap model_analyzer --path "$SPARSE_DIR/final"
+colmap model_analyzer --path "$SPARSE_DIR/final_optimized"
 
 echo ""
 echo "Output: $SPARSE_DIR/final"

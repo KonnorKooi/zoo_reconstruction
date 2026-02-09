@@ -1,21 +1,8 @@
 #!/usr/bin/env python3
 """
-LightGlue matching for stationary cameras to handheld images.
-
-This script:
-1. Loads existing COLMAP database with SIFT features
-2. Uses SuperPoint + LightGlue to find matches between stationary and handheld images
-3. Injects SuperPoint keypoints for stationary images
-4. Maps LightGlue matches to nearest SIFT keypoints in handheld images
-5. Adds matches to database for COLMAP mapper
-
-Usage:
-    pip install lightglue torch torchvision
-
-    python lightglue_match.py \
-        --database_path /path/to/database.db \
-        --stationary_dir /path/to/stationary \
-        --handheld_dir /path/to/handheld
+IMPROVED: LightGlue matching with direct SuperPoint injection.
+This script replaces SIFT keypoints for stationary images with SuperPoint 
+keypoints to avoid rounding/mapping errors in high-vantage views.
 """
 
 import argparse
@@ -30,8 +17,7 @@ try:
     from lightglue import LightGlue, SuperPoint
     from lightglue.utils import load_image, numpy_image_to_torch
 except ImportError:
-    print("ERROR: LightGlue not installed. Run:")
-    print("  pip install lightglue")
+    print("ERROR: LightGlue not installed.")
     exit(1)
 
 
@@ -63,23 +49,19 @@ def get_keypoints(conn, image_id):
 
 
 def update_keypoints(conn, image_id, keypoints):
-    """Update keypoints for an image (replace existing)."""
+    """Update keypoints. Injects as (x, y, 0, 0) for COLMAP compatibility."""
     cursor = conn.cursor()
     rows, cols = keypoints.shape
+    # If keypoints only has 2 columns (x,y), pad to 4 or 6 for COLMAP schema
+    if cols < 4:
+        padded = np.zeros((rows, 4), dtype=np.float32)
+        padded[:, :cols] = keypoints
+        keypoints = padded
+        cols = 4
+
     cursor.execute(
         "INSERT OR REPLACE INTO keypoints (image_id, rows, cols, data) VALUES (?, ?, ?, ?)",
         (image_id, rows, cols, keypoints.astype(np.float32).tobytes()))
-
-
-def update_descriptors(conn, image_id, descriptors):
-    """Update descriptors for an image (placeholder for COLMAP schema)."""
-    cursor = conn.cursor()
-    rows, cols = descriptors.shape
-    # Store as uint8 placeholder
-    desc_uint8 = (descriptors * 127 + 128).clip(0, 255).astype(np.uint8)
-    cursor.execute(
-        "INSERT OR REPLACE INTO descriptors (image_id, rows, cols, data) VALUES (?, ?, ?, ?)",
-        (image_id, rows, cols, desc_uint8.tobytes()))
 
 
 def add_matches(conn, image_id1, image_id2, matches):
@@ -108,34 +90,27 @@ def add_two_view_geometry(conn, image_id1, image_id2, matches):
         "(pair_id, rows, cols, data, config, F, E, H, qvec, tvec) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (pair_id, len(matches), 2, matches.astype(np.uint32).tobytes(),
-         0, b'', b'', b'', b'', b''))
+         1, b'', b'', b'', b'', b''))  # Config 1 = Fundamental Matrix
 
 
 def find_nearest_keypoints(query_pts, keypoints, max_dist=5.0):
     """
     For each query point, find the nearest keypoint index.
-    Returns indices and distances. Returns -1 for points with no nearby keypoint.
+    Returns indices and None. Returns -1 for points with no nearby keypoint.
     """
     if len(query_pts) == 0 or len(keypoints) == 0:
-        return np.array([]), np.array([])
+        return np.array([]), None
 
-    # Use only x, y coordinates
     kp_xy = keypoints[:, :2]
-
     indices = []
-    distances = []
     for pt in query_pts:
         dists = np.linalg.norm(kp_xy - pt[:2], axis=1)
         min_idx = np.argmin(dists)
-        min_dist = dists[min_idx]
-        if min_dist <= max_dist:
+        if dists[min_idx] <= max_dist:
             indices.append(min_idx)
-            distances.append(min_dist)
         else:
             indices.append(-1)
-            distances.append(min_dist)
-
-    return np.array(indices), np.array(distances)
+    return np.array(indices), None
 
 
 def load_image_for_lightglue(path, device):
@@ -290,9 +265,11 @@ def main():
 
     print(f"Database has {len(image_info)} images")
 
-    # Process each stationary image
+    # 1. PRE-PROCESS STATIONARY IMAGES:
+    # For each stationary image, we delete old SIFT and inject SuperPoints
     total_matches_added = 0
     pairs_with_matches = 0
+    feats_stat_cache = {}
 
     for stat_path in stat_images:
         stat_name = stat_path.name
@@ -321,31 +298,33 @@ def main():
                 scales=scales
             )
             print(f"  Multi-scale SuperPoint extracted {len(stat_keypoints)} keypoints")
-
-            # Build feats_stat dict for LightGlue matching
-            feats_stat = {
-                'keypoints': torch.from_numpy(stat_keypoints).unsqueeze(0).to(device),
-                'descriptors': torch.from_numpy(stat_descriptors).unsqueeze(0).to(device),
-                'image_size': torch.tensor([[H_stat, W_stat]]).to(device)
-            }
         else:
             # Single-scale extraction with more sensitive extractor
             with torch.no_grad():
                 img_stat, (W_stat, H_stat) = load_image_for_lightglue(stat_path, device)
-                feats_stat = extractor_stationary.extract(img_stat)
+                feats_single = extractor_stationary.extract(img_stat)
 
-            stat_keypoints = feats_stat['keypoints'][0].cpu().numpy()  # (N, 2)
-            stat_descriptors = feats_stat['descriptors'][0].cpu().numpy()  # (N, 256)
+            stat_keypoints = feats_single['keypoints'][0].cpu().numpy()  # (N, 2)
+            stat_descriptors = feats_single['descriptors'][0].cpu().numpy()  # (N, 256)
             print(f"  SuperPoint extracted {len(stat_keypoints)} keypoints")
 
-        # Update stationary image keypoints in database
-        # COLMAP expects (x, y) or (x, y, scale, orientation)
-        stat_kp_colmap = np.zeros((len(stat_keypoints), 2), dtype=np.float32)
-        stat_kp_colmap[:, :2] = stat_keypoints
-        update_keypoints(conn, stat_id, stat_kp_colmap)
-        update_descriptors(conn, stat_id, stat_descriptors)
+        # INJECT DIRECTLY: This is the critical change.
+        # We tell COLMAP these are the ONLY features for this camera.
+        update_keypoints(conn, stat_id, stat_keypoints)
 
-        # Match against each handheld image
+        # Save features in cache to avoid re-extracting during matching loop
+        feats_stat_cache[stat_id] = {
+            'keypoints': torch.from_numpy(stat_keypoints).unsqueeze(0).to(device),
+            'descriptors': torch.from_numpy(stat_descriptors).unsqueeze(0).to(device),
+            'image_size': torch.tensor([[H_stat, W_stat]]).to(device),
+            'raw_kp': stat_keypoints
+        }
+
+    # 2. MATCHING LOOP:
+    for stat_id, feats_stat in feats_stat_cache.items():
+        stat_name = image_info[stat_id]
+        print(f"\nMatching stationary: {stat_name} (id={stat_id})")
+
         for hand_path in hand_images:
             hand_name = hand_path.name
 
@@ -359,50 +338,40 @@ def main():
             if hand_id is None:
                 continue
 
-            # Get existing SIFT keypoints for handheld image
+            # Get Handheld SIFT points from DB (The anchor for reconstruction)
             hand_sift_kp = get_keypoints(conn, hand_id)
             if hand_sift_kp is None or len(hand_sift_kp) == 0:
                 continue
 
-            # Extract SuperPoint for handheld (temporary, for matching)
+            # Extract SuperPoint for Handheld ONLY for matching purposes
             with torch.no_grad():
                 img_hand, _ = load_image_for_lightglue(hand_path, device)
                 feats_hand = extractor.extract(img_hand)
 
-                # Match with LightGlue
-                matches_result = matcher({
-                    'image0': feats_stat,
-                    'image1': feats_hand
-                })
+                # LightGlue Match
+                matches_res = matcher({'image0': feats_stat, 'image1': feats_hand})
+                matches_lg = matches_res['matches'][0].cpu().numpy()
 
-            matches_lg = matches_result['matches'][0].cpu().numpy()  # (M, 2)
-
-            if len(matches_lg) == 0:
+            if len(matches_lg) < args.min_matches:
                 continue
 
-            # Get matched points in pixel coordinates
-            hand_superpoint_kp = feats_hand['keypoints'][0].cpu().numpy()
+            # BRIDGE: Map Handheld SuperPoints -> Handheld SIFT
+            hand_sp_kp = feats_hand['keypoints'][0].cpu().numpy()
+            matched_hand_sp = hand_sp_kp[matches_lg[:, 1]]
 
-            matched_stat_pts = stat_keypoints[matches_lg[:, 0]]  # SuperPoint coords in stationary
-            matched_hand_pts = hand_superpoint_kp[matches_lg[:, 1]]  # SuperPoint coords in handheld
+            hand_sift_idx, _ = find_nearest_keypoints(
+                matched_hand_sp, hand_sift_kp, args.max_keypoint_dist)
 
-            # Find nearest SIFT keypoints in handheld image
-            hand_sift_indices, dists = find_nearest_keypoints(
-                matched_hand_pts, hand_sift_kp, args.max_keypoint_dist)
-
-            # Filter valid matches (where we found a nearby SIFT keypoint)
-            valid_mask = hand_sift_indices >= 0
-
-            if valid_mask.sum() < args.min_matches:
+            # Filter matches where SIFT wasn't close enough
+            valid = hand_sift_idx >= 0
+            if valid.sum() < args.min_matches:
                 continue
 
-            # Create final matches: (SuperPoint idx in stationary, SIFT idx in handheld)
             final_matches = np.stack([
-                matches_lg[valid_mask, 0],  # SuperPoint keypoint index in stationary
-                hand_sift_indices[valid_mask]  # SIFT keypoint index in handheld
+                matches_lg[valid, 0],  # Index in Stationary SuperPoint List
+                hand_sift_idx[valid]   # Index in Handheld SIFT List
             ], axis=1).astype(np.uint32)
 
-            # Add to database
             add_matches(conn, stat_id, hand_id, final_matches)
             add_two_view_geometry(conn, stat_id, hand_id, final_matches)
 
