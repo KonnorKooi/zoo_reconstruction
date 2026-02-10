@@ -60,11 +60,11 @@ if [ -z "$1" ]; then
     exit 1
 fi
 
-PROJECT_DIR="$1"
-HANDHELD_DIR="$PROJECT_DIR/handheld"
-STATIONARY_DIR="$PROJECT_DIR/stationary"
-DATABASE_PATH="$PROJECT_DIR/database.db"
-SPARSE_DIR="$PROJECT_DIR/sparse"
+PROJECT_DIR="."
+HANDHELD_DIR="./handheld"
+STATIONARY_DIR="./stationary"
+DATABASE_PATH="./database.db"
+SPARSE_DIR="./sparse"
 
 # Verify directories exist
 if [ ! -d "$HANDHELD_DIR" ]; then
@@ -97,8 +97,6 @@ echo "[Step 1/7] Cleaning up previous run..."
 rm -f "$DATABASE_PATH"
 rm -rf "$SPARSE_DIR"
 mkdir -p "$SPARSE_DIR"
-mkdir -p "$SPARSE_DIR/0"
-mkdir -p "$SPARSE_DIR/final"
 
 # ============================================================================
 # STEP 2: Extract SIFT features for handheld images
@@ -169,7 +167,7 @@ echo ""
 echo "[Step 6/7] Running initial reconstruction..."
 colmap mapper \
     --database_path "$DATABASE_PATH" \
-    --image_path "$PROJECT_DIR" \
+    --image_path "." \
     --output_path "$SPARSE_DIR" \
     --Mapper.min_num_matches $MAPPER_MIN_NUM_MATCHES \
     --Mapper.init_min_num_inliers $MAPPER_INIT_MIN_NUM_INLIERS \
