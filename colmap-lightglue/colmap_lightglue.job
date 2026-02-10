@@ -2,7 +2,7 @@ universe = vanilla
 executable = pipeline_stationary_cameras.sh
 arguments = .
 
-initialdir = /home/konnorkooi/code/research/zoo_reconstruction/colmap-lightglue
+initialdir = /cluster/research-groups/wehrwein/zoo/konnor/colmap/zoo_reconstruction/colmap-lightglue
 
 request_cpus = 4
 request_memory = 32GB
