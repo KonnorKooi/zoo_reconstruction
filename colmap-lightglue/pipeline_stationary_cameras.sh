@@ -125,12 +125,12 @@ colmap feature_extractor \
     --SiftExtraction.max_num_features $STATIONARY_MAX_FEATURES \
     --SiftExtraction.first_octave -1 \
     --SiftExtraction.num_octaves 6 \
-    --SiftExtraction.estimate_affine_shape 1 \  # handles perspective better
+    --SiftExtraction.estimate_affine_shape 1 \
     --SiftExtraction.domain_size_pooling 1 \
     --SiftExtraction.dsp_min_scale 0.1 \
     --SiftExtraction.dsp_max_scale 4.0 \
     --ImageReader.single_camera 1 \
-    --ImageReader.default_focal_length_factor 1.2 # Typical for security cams
+    --ImageReader.default_focal_length_factor 1.2
 
 # ============================================================================
 # STEP 4: Match handheld images with COLMAP

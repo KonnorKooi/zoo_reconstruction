@@ -2,13 +2,11 @@ universe = vanilla
 executable = pipeline_stationary_cameras.sh
 arguments = /cluster/research-groups/wehrwein/zoo/konnor/colmap/zoo_reconstruction/colmap-lightglue
 
-request_cpus = 8
-request_memory = 64GB
+request_cpus = 4
+request_memory = 32GB
 request_gpus = 1
-gpus_minimum_memory = 80000
 
-+WantH100 = True
-+WantPreempt = True
+request_gpus = 1
 
 output = logs/output.log
 error = logs/error.log
