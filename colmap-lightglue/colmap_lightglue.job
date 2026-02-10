@@ -16,10 +16,10 @@ when_to_transfer_output = ON_EXIT
 
 # We transfer the python script and the image folders.
 # If you want to start with a clean DB, leave 'database.db' out of this list.
-transfer_input_files = lightglue_match.py, stationary/, handheld/
+transfer_input_files = lightglue_match.py, stationary, handheld
 
 # Explicitly telling Condor to bring these back ensures nothing is lost
-transfer_output_files = database.db, sparse/
+transfer_output_files = database.db, sparse
 
 output = logs/output.log
 error = logs/error.log
