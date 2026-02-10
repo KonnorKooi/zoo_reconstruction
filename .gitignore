@@ -48,3 +48,5 @@ Thumbs.db
 .ipynb_checkpoints/
 
 colmap-lightglue/logs/*
+
+*.bin
