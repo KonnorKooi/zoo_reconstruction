@@ -211,7 +211,7 @@ colmap bundle_adjuster \
     --output_path "$SPARSE_DIR/final_optimized" \
     --BundleAdjustment.refine_focal_length 1 \
     --BundleAdjustment.refine_extra_params 1 \
-
+    --BundleAdjustment.refine_extrinsic 1
 
 
 # ============================================================================
