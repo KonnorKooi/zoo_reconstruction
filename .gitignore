@@ -50,3 +50,5 @@ Thumbs.db
 colmap-lightglue/logs/*
 
 *.bin
+
+*.db*

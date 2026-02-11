@@ -96,7 +96,7 @@ echo ""
 # STEP 1: Clean up previous run
 # ============================================================================
 
-echo "[Step 1/7] Cleaning up previous run..."
+echo "[Step 1/8] Cleaning up previous run..."
 rm -f "$DATABASE_PATH"
 rm -rf "$SPARSE_DIR"
 mkdir -p "$SPARSE_DIR"
@@ -108,11 +108,11 @@ echo "Found $(wc -l < handheld_images.txt) handheld images"
 echo "Found $(wc -l < stationary_images.txt) stationary images"
 
 # ============================================================================
-# STEP 2: Extract SIFT features for handheld images
+# STEP 2: Extract SIFT features for handheld images ONLY
 # ============================================================================
 
 echo ""
-echo "[Step 2/7] Extracting SIFT features for handheld images..."
+echo "[Step 2/8] Extracting SIFT features for handheld images..."
 colmap feature_extractor \
     --database_path "$DATABASE_PATH" \
     --image_path "." \
@@ -120,11 +120,43 @@ colmap feature_extractor \
     --SiftExtraction.max_num_features $HANDHELD_MAX_FEATURES
 
 # ============================================================================
-# STEP 3: Extract SIFT features for stationary images (with upscaling)
+# STEP 3: Match handheld images with COLMAP (handheld only in DB)
 # ============================================================================
 
 echo ""
-echo "[Step 3/7] Extracting SIFT features for stationary images..."
+echo "[Step 3/8] Matching handheld images with COLMAP..."
+colmap exhaustive_matcher \
+    --database_path "$DATABASE_PATH"
+
+# ============================================================================
+# STEP 4: Initial reconstruction (handheld only)
+# ============================================================================
+
+echo ""
+echo "[Step 4/8] Running initial reconstruction (handheld only)..."
+colmap mapper \
+    --database_path "$DATABASE_PATH" \
+    --image_path "." \
+    --output_path "$SPARSE_DIR" \
+    --Mapper.min_num_matches $MAPPER_MIN_NUM_MATCHES \
+    --Mapper.init_min_num_inliers $MAPPER_INIT_MIN_NUM_INLIERS \
+    --Mapper.tri_min_angle $MAPPER_TRI_MIN_ANGLE \
+    --Mapper.multiple_models 0
+
+# Find the largest reconstruction
+BEST_MODEL=$(ls -d "$SPARSE_DIR"/*/ 2>/dev/null | head -1)
+if [ -z "$BEST_MODEL" ]; then
+    echo "ERROR: No reconstruction created"
+    exit 1
+fi
+echo "Best model: $BEST_MODEL"
+
+# ============================================================================
+# STEP 5: Extract SIFT features for stationary images
+# ============================================================================
+
+echo ""
+echo "[Step 5/8] Extracting SIFT features for stationary images..."
 colmap feature_extractor \
     --database_path "$DATABASE_PATH" \
     --image_path "." \
@@ -140,20 +172,11 @@ colmap feature_extractor \
     --ImageReader.default_focal_length_factor 1.2
 
 # ============================================================================
-# STEP 4: Match handheld images with COLMAP
+# STEP 6: Run LightGlue matching for stationary -> handheld
 # ============================================================================
 
 echo ""
-echo "[Step 4/7] Matching handheld images with COLMAP..."
-colmap exhaustive_matcher \
-    --database_path "$DATABASE_PATH"
-
-# ============================================================================
-# STEP 5: Run LightGlue matching for stationary -> handheld
-# ============================================================================
-
-echo ""
-echo "[Step 5/7] Running LightGlue matching for stationary -> handheld..."
+echo "[Step 6/8] Running LightGlue matching for stationary -> handheld..."
 MULTISCALE_FLAG=""
 if [ "$LIGHTGLUE_MULTISCALE" = true ]; then
     MULTISCALE_FLAG="--multiscale --scales 0.5,1.0,2.0"
@@ -169,35 +192,11 @@ apptainer exec --nv "$CONTAINER" python3 "$SCRIPT_DIR/lightglue_match.py" \
     $MULTISCALE_FLAG
 
 # ============================================================================
-# STEP 6: Initial reconstruction (handheld images)
-# ============================================================================
-
-echo ""
-echo "[Step 6/7] Running initial reconstruction..."
-colmap mapper \
-    --database_path "$DATABASE_PATH" \
-    --image_path "." \
-    --output_path "$SPARSE_DIR" \
-    --Mapper.image_list_path handheld_images.txt \
-    --Mapper.min_num_matches $MAPPER_MIN_NUM_MATCHES \
-    --Mapper.init_min_num_inliers $MAPPER_INIT_MIN_NUM_INLIERS \
-    --Mapper.tri_min_angle $MAPPER_TRI_MIN_ANGLE \
-    --Mapper.multiple_models 0
-
-# Find the largest reconstruction
-BEST_MODEL=$(ls -d "$SPARSE_DIR"/*/ 2>/dev/null | head -1)
-if [ -z "$BEST_MODEL" ]; then
-    echo "ERROR: No reconstruction created"
-    exit 1
-fi
-echo "Best model: $BEST_MODEL"
-
-# ============================================================================
 # STEP 7: Register stationary cameras with relaxed constraints
 # ============================================================================
 
 echo ""
-echo "[Step 7/7] Registering stationary cameras with relaxed constraints..."
+echo "[Step 7/8] Registering stationary cameras with relaxed constraints..."
 mkdir -p "$SPARSE_DIR/final"
 colmap image_registrator \
     --database_path "$DATABASE_PATH" \
@@ -206,25 +205,24 @@ colmap image_registrator \
     --Mapper.abs_pose_min_num_inliers $MAPPER_ABS_POSE_MIN_INLIERS \
     --Mapper.abs_pose_min_inlier_ratio $MAPPER_ABS_POSE_MIN_INLIER_RATIO
 
-# Add this after Step 7
-# Triangulate additional points using the registered stationary camera poses
-# This fills in gaps in the 3D point cloud by computing 3D points from matched features
+# ============================================================================
+# STEP 8: Triangulate and optimize
+# ============================================================================
+
+echo ""
+echo "[Step 8/8] Triangulating and optimizing..."
 colmap point_triangulator \
     --database_path "$DATABASE_PATH" \
     --image_path "." \
     --input_path "$SPARSE_DIR/final" \
     --output_path "$SPARSE_DIR/final"
 
-# Refine the reconstruction through bundle adjustment
-# Optimizes camera poses and 3D point positions to minimize reprojection error
-# Also refines focal length and lens distortion parameters for better accuracy
 mkdir -p "$SPARSE_DIR/final_optimized"
 colmap bundle_adjuster \
     --input_path "$SPARSE_DIR/final" \
     --output_path "$SPARSE_DIR/final_optimized" \
     --BundleAdjustment.refine_focal_length 1 \
     --BundleAdjustment.refine_extra_params 1 \
-
 
 # ============================================================================
 # DONE
