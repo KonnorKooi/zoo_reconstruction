@@ -101,6 +101,12 @@ rm -f "$DATABASE_PATH"
 rm -rf "$SPARSE_DIR"
 mkdir -p "$SPARSE_DIR"
 
+# Generate image lists (paths relative to PROJECT_DIR)
+find "$HANDHELD_DIR" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.tif" -o -iname "*.tiff" \) | sort > handheld_images.txt
+find "$STATIONARY_DIR" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.tif" -o -iname "*.tiff" \) | sort > stationary_images.txt
+echo "Found $(wc -l < handheld_images.txt) handheld images"
+echo "Found $(wc -l < stationary_images.txt) stationary images"
+
 # ============================================================================
 # STEP 2: Extract SIFT features for handheld images
 # ============================================================================
@@ -109,7 +115,8 @@ echo ""
 echo "[Step 2/7] Extracting SIFT features for handheld images..."
 colmap feature_extractor \
     --database_path "$DATABASE_PATH" \
-    --image_path "$HANDHELD_DIR" \
+    --image_path "." \
+    --image_list_path handheld_images.txt \
     --SiftExtraction.max_num_features $HANDHELD_MAX_FEATURES \
     --SiftExtraction.estimate_affine_shape 1 \
     --SiftExtraction.domain_size_pooling 1
@@ -122,7 +129,8 @@ echo ""
 echo "[Step 3/7] Extracting SIFT features for stationary images..."
 colmap feature_extractor \
     --database_path "$DATABASE_PATH" \
-    --image_path "$STATIONARY_DIR" \
+    --image_path "." \
+    --image_list_path stationary_images.txt \
     --SiftExtraction.max_num_features $STATIONARY_MAX_FEATURES \
     --SiftExtraction.first_octave -1 \
     --SiftExtraction.num_octaves 6 \
