@@ -32,7 +32,7 @@ colmap() {
 }
 
 # Feature extraction settings
-HANDHELD_MAX_FEATURES=5000        # Features per handheld image
+HANDHELD_MAX_FEATURES=8192        # Features per handheld image
 STATIONARY_MAX_FEATURES=16384      # Features per stationary image
 
 # LightGlue matching settings
@@ -117,9 +117,7 @@ colmap feature_extractor \
     --database_path "$DATABASE_PATH" \
     --image_path "." \
     --image_list_path handheld_images.txt \
-    --SiftExtraction.max_num_features $HANDHELD_MAX_FEATURES \
-    --SiftExtraction.estimate_affine_shape 1 \
-    --SiftExtraction.domain_size_pooling 1
+    --SiftExtraction.max_num_features $HANDHELD_MAX_FEATURES
 
 # ============================================================================
 # STEP 3: Extract SIFT features for stationary images (with upscaling)
@@ -180,9 +178,11 @@ colmap mapper \
     --database_path "$DATABASE_PATH" \
     --image_path "." \
     --output_path "$SPARSE_DIR" \
+    --Mapper.image_list_path handheld_images.txt \
     --Mapper.min_num_matches $MAPPER_MIN_NUM_MATCHES \
     --Mapper.init_min_num_inliers $MAPPER_INIT_MIN_NUM_INLIERS \
-    --Mapper.tri_min_angle $MAPPER_TRI_MIN_ANGLE
+    --Mapper.tri_min_angle $MAPPER_TRI_MIN_ANGLE \
+    --Mapper.multiple_models 0
 
 # Find the largest reconstruction
 BEST_MODEL=$(ls -d "$SPARSE_DIR"/*/ 2>/dev/null | head -1)
@@ -198,6 +198,7 @@ echo "Best model: $BEST_MODEL"
 
 echo ""
 echo "[Step 7/7] Registering stationary cameras with relaxed constraints..."
+mkdir -p "$SPARSE_DIR/final"
 colmap image_registrator \
     --database_path "$DATABASE_PATH" \
     --input_path "$BEST_MODEL" \
@@ -217,6 +218,7 @@ colmap point_triangulator \
 # Refine the reconstruction through bundle adjustment
 # Optimizes camera poses and 3D point positions to minimize reprojection error
 # Also refines focal length and lens distortion parameters for better accuracy
+mkdir -p "$SPARSE_DIR/final_optimized"
 colmap bundle_adjuster \
     --input_path "$SPARSE_DIR/final" \
     --output_path "$SPARSE_DIR/final_optimized" \
