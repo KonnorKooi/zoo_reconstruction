@@ -175,10 +175,11 @@ apptainer exec --nv "$CONTAINER" python3 "$SCRIPT_DIR/lightglue_match.py" \
 # ============================================================================
 
 echo ""
-echo "[Step 6/7] Running initial reconstruction..."
+echo "[Step 6/7] Running initial reconstruction (handheld only)..."
 colmap mapper \
     --database_path "$DATABASE_PATH" \
     --image_path "." \
+    --image_list_path handheld_images.txt \
     --output_path "$SPARSE_DIR" \
     --Mapper.min_num_matches $MAPPER_MIN_NUM_MATCHES \
     --Mapper.init_min_num_inliers $MAPPER_INIT_MIN_NUM_INLIERS \
@@ -210,7 +211,7 @@ colmap image_registrator \
 # This fills in gaps in the 3D point cloud by computing 3D points from matched features
 colmap point_triangulator \
     --database_path "$DATABASE_PATH" \
-    --image_path "$PROJECT_DIR" \
+    --image_path "." \
     --input_path "$SPARSE_DIR/final" \
     --output_path "$SPARSE_DIR/final"
 
