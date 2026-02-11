@@ -23,7 +23,10 @@ set -e  # Exit on error
 # ============================================================================
 
 # container setup to use the colmap in the apptainer
-CONTAINER="/cluster/research-groups/wehrwein/zoo/containers/colmap.sif"
+# Copy container to local scratch to avoid NFS I/O
+LOCAL_CONTAINER="/tmp/colmap_$$.sif"
+cp /cluster/research-groups/wehrwein/zoo/containers/colmap.sif "$LOCAL_CONTAINER"
+CONTAINER="$LOCAL_CONTAINER"
 colmap() {
     apptainer exec --nv "$CONTAINER" colmap "$@"
 }
@@ -230,3 +233,6 @@ echo ""
 echo "To view in COLMAP GUI:"
 echo "  colmap gui"
 echo "  File -> Import model -> $SPARSE_DIR/final"
+
+# Clean up local container copy
+rm -f "$LOCAL_CONTAINER"
