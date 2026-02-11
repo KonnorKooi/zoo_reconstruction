@@ -175,11 +175,10 @@ apptainer exec --nv "$CONTAINER" python3 "$SCRIPT_DIR/lightglue_match.py" \
 # ============================================================================
 
 echo ""
-echo "[Step 6/7] Running initial reconstruction (handheld only)..."
+echo "[Step 6/7] Running initial reconstruction..."
 colmap mapper \
     --database_path "$DATABASE_PATH" \
     --image_path "." \
-    --image_list_path handheld_images.txt \
     --output_path "$SPARSE_DIR" \
     --Mapper.min_num_matches $MAPPER_MIN_NUM_MATCHES \
     --Mapper.init_min_num_inliers $MAPPER_INIT_MIN_NUM_INLIERS \
