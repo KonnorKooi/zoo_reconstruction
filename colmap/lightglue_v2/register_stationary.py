@@ -5,10 +5,11 @@ Direct PnP registration of stationary cameras into a COLMAP reconstruction.
 Instead of injecting matches into the database and hoping image_registrator works,
 this script:
   1. Matches stationary images to handheld images via LightGlue (SuperPoint)
-  2. Bridges handheld SuperPoint keypoints to nearby SIFT keypoints that have known 3D points
-  3. Collects 2D (stationary pixel) <-> 3D (world point) correspondences
-  4. Solves PnP + RANSAC to estimate the stationary camera pose directly
-  5. Injects the pose into the COLMAP reconstruction model
+  2. Projects known 3D points onto handheld images using known camera poses
+  3. Bridges SuperPoint matches to 3D points via nearest projected point
+  4. Collects 2D (stationary pixel) <-> 3D (world point) correspondences
+  5. Solves PnP + RANSAC to estimate the stationary camera pose directly
+  6. Writes the updated reconstruction in text format
 """
 
 import argparse
@@ -209,26 +210,59 @@ def get_camera_matrix(camera):
 # Build 3D point lookup from reconstruction
 # ============================================================================
 
-def build_sift_to_3d_lookup(images, points3D):
+def qvec_to_rotmat(qvec):
+    """Convert COLMAP quaternion (qw, qx, qy, qz) to 3x3 rotation matrix."""
+    qw, qx, qy, qz = qvec
+    return np.array([
+        [1 - 2*qy*qy - 2*qz*qz, 2*qx*qy - 2*qz*qw, 2*qx*qz + 2*qy*qw],
+        [2*qx*qy + 2*qz*qw, 1 - 2*qx*qx - 2*qz*qz, 2*qy*qz - 2*qx*qw],
+        [2*qx*qz - 2*qy*qw, 2*qy*qz + 2*qx*qw, 1 - 2*qx*qx - 2*qy*qy]
+    ])
+
+
+def project_3d_points_to_image(points3D, image, camera):
     """
-    Build a mapping: (image_id, keypoint_index) -> 3D point xyz.
-    Also returns keypoint pixel locations for bridging.
+    Project all visible 3D points onto a handheld image using known pose.
 
     Returns:
-        kp_to_3d: dict of { image_id: { kp_idx: (xyz, point3D_id) } }
-        kp_locations: dict of { image_id: np.array of shape (N, 2) }
+        projected_xy: np.array of shape (N, 2) - pixel coordinates
+        point3D_ids: list of point3D IDs
+        world_xyz: np.array of shape (N, 3) - world coordinates
     """
-    kp_to_3d = {}
-    kp_locations = {}
+    R = qvec_to_rotmat(image.qvec)
+    t = np.array(image.tvec)
+    K, dist = get_camera_matrix(camera)
 
-    for image_id, img in images.items():
-        kp_locations[image_id] = np.array(img.xys) if len(img.xys) > 0 else np.zeros((0, 2))
-        kp_to_3d[image_id] = {}
-        for kp_idx, p3d_id in enumerate(img.point3D_ids):
-            if p3d_id != -1 and p3d_id in points3D:
-                kp_to_3d[image_id][kp_idx] = (np.array(points3D[p3d_id].xyz), p3d_id)
+    # Collect 3D points visible in this image
+    visible_xyz = []
+    visible_ids = []
+    for kp_idx, p3d_id in enumerate(image.point3D_ids):
+        if p3d_id != -1 and p3d_id in points3D:
+            visible_xyz.append(points3D[p3d_id].xyz)
+            visible_ids.append(p3d_id)
 
-    return kp_to_3d, kp_locations
+    if len(visible_xyz) == 0:
+        return np.zeros((0, 2)), [], np.zeros((0, 3))
+
+    world_xyz = np.array(visible_xyz)
+
+    # Project: x = K * (R * X + t)
+    cam_pts = (R @ world_xyz.T).T + t  # (N, 3)
+    # Filter points behind camera
+    in_front = cam_pts[:, 2] > 0
+    cam_pts = cam_pts[in_front]
+    world_xyz = world_xyz[in_front]
+    visible_ids = [pid for pid, f in zip(visible_ids, in_front) if f]
+
+    if len(cam_pts) == 0:
+        return np.zeros((0, 2)), [], np.zeros((0, 3))
+
+    # Project to pixel coordinates (ignoring distortion for now)
+    proj_x = K[0, 0] * cam_pts[:, 0] / cam_pts[:, 2] + K[0, 2]
+    proj_y = K[1, 1] * cam_pts[:, 1] / cam_pts[:, 2] + K[1, 2]
+    projected_xy = np.stack([proj_x, proj_y], axis=1)
+
+    return projected_xy, visible_ids, world_xyz
 
 
 # ============================================================================
@@ -298,18 +332,6 @@ def get_db_image_info(db_path):
     return info
 
 
-def get_db_keypoints(db_path, image_id):
-    """Get SIFT keypoints for an image from database."""
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute("SELECT rows, cols, data FROM keypoints WHERE image_id = ?", (image_id,))
-    row = cursor.fetchone()
-    conn.close()
-    if row is None:
-        return None
-    rows, cols, data = row
-    return np.frombuffer(data, dtype=np.float32).reshape(rows, cols)
-
 
 # ============================================================================
 # Main
@@ -344,12 +366,9 @@ def main():
     points3D = read_points3D_binary(str(Path(args.model_path) / "points3D.bin"))
     print(f"  {len(cameras)} cameras, {len(images)} images, {len(points3D)} 3D points")
 
-    # Build lookup: for each registered image, which SIFT keypoints have 3D points?
-    kp_to_3d, kp_locations = build_sift_to_3d_lookup(images, points3D)
-
-    # Count total 3D-linked keypoints
-    total_3d_kps = sum(len(v) for v in kp_to_3d.values())
-    print(f"  {total_3d_kps} keypoints with known 3D points across all images")
+    # Count total 3D-linked observations
+    total_obs = sum(1 for img in images.values() for p3d_id in img.point3D_ids if p3d_id != -1)
+    print(f"  {total_obs} observations with known 3D points across all images")
 
     # Load database image info (maps image names to IDs)
     db_info = get_db_image_info(args.database_path)
@@ -445,21 +464,14 @@ def main():
             if hand_recon_id is None:
                 continue
 
-            # Does this image have any 3D-linked keypoints?
-            if hand_recon_id not in kp_to_3d or len(kp_to_3d[hand_recon_id]) == 0:
-                continue
+            hand_img = images[hand_recon_id]
+            hand_cam = cameras[hand_img.camera_id]
 
-            # Get SIFT keypoints from database for bridging
-            hand_db_id = None
-            for name, img_id in db_name_to_id.items():
-                if name.endswith(hand_name) or hand_name in name:
-                    hand_db_id = img_id
-                    break
-            if hand_db_id is None:
-                continue
+            # Project all visible 3D points onto this handheld image
+            proj_xy, proj_p3d_ids, proj_xyz = project_3d_points_to_image(
+                points3D, hand_img, hand_cam)
 
-            hand_sift_kp = get_db_keypoints(args.database_path, hand_db_id)
-            if hand_sift_kp is None or len(hand_sift_kp) == 0:
+            if len(proj_xy) == 0:
                 continue
 
             # Extract SuperPoint for handheld and match via LightGlue
@@ -474,7 +486,8 @@ def main():
 
             hand_sp_kp = feats_hand['keypoints'][0].cpu().numpy()
 
-            # For each LightGlue match, bridge handheld SuperPoint -> nearest SIFT with 3D point
+            # For each LightGlue match, find nearest PROJECTED 3D point
+            # (no SIFT bridging — uses geometrically exact projections)
             pair_2d = []
             pair_3d = []
             pair_ids = []
@@ -483,29 +496,14 @@ def main():
                 stat_idx, hand_sp_idx = match[0], match[1]
                 hand_sp_pt = hand_sp_kp[hand_sp_idx]
 
-                # Find nearest SIFT keypoint that has a 3D point
-                best_dist = args.max_keypoint_dist
-                best_3d = None
-                best_p3d_id = None
+                # Find nearest projected 3D point to this SuperPoint keypoint
+                dists = np.linalg.norm(proj_xy - hand_sp_pt[:2], axis=1)
+                min_idx = np.argmin(dists)
 
-                sift_xy = hand_sift_kp[:, :2]
-                dists = np.linalg.norm(sift_xy - hand_sp_pt[:2], axis=1)
-
-                # Check candidates in order of distance
-                sorted_idx = np.argsort(dists)
-                for si in sorted_idx:
-                    if dists[si] > args.max_keypoint_dist:
-                        break
-                    if si in kp_to_3d[hand_recon_id]:
-                        xyz, p3d_id = kp_to_3d[hand_recon_id][si]
-                        best_3d = xyz
-                        best_p3d_id = p3d_id
-                        break
-
-                if best_3d is not None:
+                if dists[min_idx] <= args.max_keypoint_dist:
                     pair_2d.append(stat_kp[stat_idx])
-                    pair_3d.append(best_3d)
-                    pair_ids.append(best_p3d_id)
+                    pair_3d.append(proj_xyz[min_idx])
+                    pair_ids.append(proj_p3d_ids[min_idx])
 
             if len(pair_2d) > 0:
                 all_pts_2d.extend(pair_2d)
