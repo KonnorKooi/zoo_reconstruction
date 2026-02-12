@@ -2,7 +2,7 @@ universe = vanilla
 executable = pipeline_stationary_cameras.sh
 arguments = .
 
-initialdir = /cluster/research-groups/wehrwein/zoo/konnor/colmap/zoo_reconstruction/colmap/lightglue_v1
+initialdir = /cluster/research-groups/wehrwein/zoo/konnor/colmap/zoo_reconstruction/colmap/lightglue_v2
 
 request_cpus = 4
 request_memory = 32GB
@@ -12,8 +12,10 @@ request_disk = 20GB
 should_transfer_files = YES
 when_to_transfer_output = ON_EXIT
 
+# handheld and stationary are siblings in ../
+# lightglue_match.py is in ../
 transfer_input_files = ../lightglue_match.py, ../stationary, ../handheld
-transfer_output_files = database.db, sparse
+transfer_output_files = 01_handheld, 02_with_stationary
 
 output = logs/output.log
 error = logs/error.log
