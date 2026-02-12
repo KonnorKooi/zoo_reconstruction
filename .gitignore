@@ -52,3 +52,5 @@ colmap-lightglue/logs/*
 *.bin
 
 *.db*
+
+*.ini
