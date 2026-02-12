@@ -375,6 +375,8 @@ def main():
     parser.add_argument('--stationary_detection_threshold', type=float, default=0.0005)
     parser.add_argument('--multiscale', action='store_true')
     parser.add_argument('--scales', type=str, default='0.25,0.5,0.75,1.0,1.5,2.0,3.0')
+    parser.add_argument('--manual_correspondences', type=str, default=None,
+                        help='JSON file with manual 2D-3D correspondences (skips LightGlue matching)')
     args = parser.parse_args()
 
     device = torch.device(args.device if torch.cuda.is_available() else 'cpu')

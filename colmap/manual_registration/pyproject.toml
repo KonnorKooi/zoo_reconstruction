@@ -1,0 +1,9 @@
+[project]
+name = "manual-registration"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.13"
+dependencies = [
+    "matplotlib>=3.10.8",
+    "pillow>=12.1.1",
+]

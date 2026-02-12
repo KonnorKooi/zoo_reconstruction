@@ -54,3 +54,6 @@ colmap-lightglue/logs/*
 *.db*
 
 *.ini
+
+*.lock
+
