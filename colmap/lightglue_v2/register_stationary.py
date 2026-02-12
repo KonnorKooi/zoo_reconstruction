@@ -62,16 +62,23 @@ def read_cameras_binary(path):
     return cameras
 
 
-def write_cameras_binary(cameras, path):
-    with open(path, "wb") as fid:
-        fid.write(struct.pack("<Q", len(cameras)))
+CAMERA_MODEL_NAMES = {
+    0: "SIMPLE_PINHOLE", 1: "PINHOLE", 2: "SIMPLE_RADIAL", 3: "RADIAL",
+    4: "OPENCV", 5: "FULL_OPENCV", 6: "SIMPLE_RADIAL_FISHEYE",
+    7: "RADIAL_FISHEYE", 8: "OPENCV_FISHEYE"
+}
+
+
+def write_cameras_text(cameras, path):
+    with open(path, "w") as f:
+        f.write("# Camera list with one line of data per camera:\n")
+        f.write("#   CAMERA_ID, MODEL, WIDTH, HEIGHT, PARAMS[]\n")
+        f.write(f"# Number of cameras: {len(cameras)}\n")
         for cam_id in sorted(cameras.keys()):
             cam = cameras[cam_id]
-            fid.write(struct.pack("<i", cam.id))
-            fid.write(struct.pack("<i", cam.model))
-            fid.write(struct.pack("<Q", cam.width))
-            fid.write(struct.pack("<Q", cam.height))
-            fid.write(struct.pack("<" + "d" * len(cam.params), *cam.params))
+            model_name = CAMERA_MODEL_NAMES.get(cam.model, str(cam.model))
+            params_str = " ".join(f"{p:.12g}" for p in cam.params)
+            f.write(f"{cam.id} {model_name} {cam.width} {cam.height} {params_str}\n")
 
 
 def read_images_binary(path):
@@ -102,21 +109,22 @@ def read_images_binary(path):
     return images
 
 
-def write_images_binary(images, path):
-    with open(path, "wb") as fid:
-        fid.write(struct.pack("<Q", len(images)))
+def write_images_text(images, path):
+    with open(path, "w") as f:
+        f.write("# Image list with two lines of data per image:\n")
+        f.write("#   IMAGE_ID, QW, QX, QY, QZ, TX, TY, TZ, CAMERA_ID, NAME\n")
+        f.write("#   POINTS2D[] as (X, Y, POINT3D_ID)\n")
+        f.write(f"# Number of images: {len(images)}\n")
         for image_id in sorted(images.keys()):
             img = images[image_id]
-            fid.write(struct.pack("<i", img.id))
-            fid.write(struct.pack("<" + "d" * 4, *img.qvec))
-            fid.write(struct.pack("<" + "d" * 3, *img.tvec))
-            fid.write(struct.pack("<i", img.camera_id))
-            fid.write(img.name.encode("utf-8"))
-            fid.write(b"\x00")
-            fid.write(struct.pack("<Q", len(img.xys)))
+            qw, qx, qy, qz = img.qvec
+            tx, ty, tz = img.tvec
+            f.write(f"{img.id} {qw:.12g} {qx:.12g} {qy:.12g} {qz:.12g} "
+                    f"{tx:.12g} {ty:.12g} {tz:.12g} {img.camera_id} {img.name}\n")
+            pts_parts = []
             for xy, p3d_id in zip(img.xys, img.point3D_ids):
-                fid.write(struct.pack("<dd", xy[0], xy[1]))
-                fid.write(struct.pack("<q", p3d_id))
+                pts_parts.append(f"{xy[0]:.6g} {xy[1]:.6g} {p3d_id}")
+            f.write(" ".join(pts_parts) + "\n")
 
 
 def read_points3D_binary(path):
@@ -139,18 +147,19 @@ def read_points3D_binary(path):
     return points3D
 
 
-def write_points3D_binary(points3D, path):
-    with open(path, "wb") as fid:
-        fid.write(struct.pack("<Q", len(points3D)))
+def write_points3D_text(points3D, path):
+    with open(path, "w") as f:
+        f.write("# 3D point list with one line of data per point:\n")
+        f.write("#   POINT3D_ID, X, Y, Z, R, G, B, ERROR, TRACK[] as (IMAGE_ID, POINT2D_IDX)\n")
+        f.write(f"# Number of points: {len(points3D)}\n")
         for p3d_id in sorted(points3D.keys()):
             pt = points3D[p3d_id]
-            fid.write(struct.pack("<Q", pt.id))
-            fid.write(struct.pack("<ddd", *pt.xyz))
-            fid.write(struct.pack("<BBB", *pt.rgb))
-            fid.write(struct.pack("<d", pt.error))
-            fid.write(struct.pack("<Q", len(pt.image_ids)))
+            track_parts = []
             for im_id, p2d_idx in zip(pt.image_ids, pt.point2D_idxs):
-                fid.write(struct.pack("<ii", im_id, p2d_idx))
+                track_parts.append(f"{im_id} {p2d_idx}")
+            f.write(f"{pt.id} {pt.xyz[0]:.12g} {pt.xyz[1]:.12g} {pt.xyz[2]:.12g} "
+                    f"{pt.rgb[0]} {pt.rgb[1]} {pt.rgb[2]} {pt.error:.12g} "
+                    f"{' '.join(track_parts)}\n")
 
 
 # ============================================================================
@@ -535,33 +544,59 @@ def main():
             continue
 
         # Estimate camera intrinsics for PnP
-        # Use a simple pinhole model based on image size as initial guess
-        # or use the camera from the database if available
+        # Try multiple focal lengths and pick the one with the most inliers
+        dist_coeffs = np.zeros(4)
+        known_camera = False
+
         if stat_name in stat_camera_ids:
             cam_id = stat_camera_ids[stat_name]
             if cam_id in cameras:
                 K, dist_coeffs = get_camera_matrix(cameras[cam_id])
+                known_camera = True
                 print(f"  Using existing camera {cam_id} from reconstruction")
-            else:
-                # Camera exists in DB but not in reconstruction, use simple estimate
-                f = max(W_stat, H_stat) * 1.2
-                K = np.array([[f, 0, W_stat/2], [0, f, H_stat/2], [0, 0, 1]], dtype=np.float64)
-                dist_coeffs = np.zeros(4)
-                print(f"  Using estimated focal length: {f:.1f}")
-        else:
-            f = max(W_stat, H_stat) * 1.2
-            K = np.array([[f, 0, W_stat/2], [0, f, H_stat/2], [0, 0, 1]], dtype=np.float64)
-            dist_coeffs = np.zeros(4)
-            print(f"  Using estimated focal length: {f:.1f}")
 
-        # Solve PnP + RANSAC
-        print(f"  Running PnP RANSAC (threshold={args.pnp_reproj_threshold}px)...")
-        success, rvec, tvec, inliers = cv2.solvePnPRansac(
-            pts_3d, pts_2d, K, dist_coeffs,
-            iterationsCount=10000,
-            reprojectionError=args.pnp_reproj_threshold,
-            flags=cv2.SOLVEPNP_SQPNP
-        )
+        if not known_camera:
+            # No EXIF data, try a range of focal lengths
+            focal_candidates = [
+                max(W_stat, H_stat) * f for f in [0.5, 0.7, 0.85, 1.0, 1.2, 1.5, 2.0]
+            ]
+            print(f"  No EXIF data. Trying {len(focal_candidates)} focal lengths...")
+
+            best_f = None
+            best_inlier_count = 0
+            best_result = None
+
+            for f_test in focal_candidates:
+                K_test = np.array([[f_test, 0, W_stat/2], [0, f_test, H_stat/2], [0, 0, 1]], dtype=np.float64)
+                success_test, rvec_test, tvec_test, inliers_test = cv2.solvePnPRansac(
+                    pts_3d, pts_2d, K_test, dist_coeffs,
+                    iterationsCount=10000,
+                    reprojectionError=args.pnp_reproj_threshold,
+                    flags=cv2.SOLVEPNP_SQPNP
+                )
+                n_inliers = len(inliers_test) if success_test and inliers_test is not None else 0
+                print(f"    f={f_test:.1f}: {n_inliers} inliers")
+                if n_inliers > best_inlier_count:
+                    best_inlier_count = n_inliers
+                    best_f = f_test
+                    best_result = (success_test, rvec_test, tvec_test, inliers_test)
+
+            if best_f is None or best_inlier_count < args.min_correspondences:
+                print(f"  FAILED: No focal length produced enough inliers")
+                continue
+
+            K = np.array([[best_f, 0, W_stat/2], [0, best_f, H_stat/2], [0, 0, 1]], dtype=np.float64)
+            print(f"  Best focal length: {best_f:.1f} ({best_inlier_count} inliers)")
+            success, rvec, tvec, inliers = best_result
+        else:
+            # Solve PnP + RANSAC with known intrinsics
+            print(f"  Running PnP RANSAC (threshold={args.pnp_reproj_threshold}px)...")
+            success, rvec, tvec, inliers = cv2.solvePnPRansac(
+                pts_3d, pts_2d, K, dist_coeffs,
+                iterationsCount=10000,
+                reprojectionError=args.pnp_reproj_threshold,
+                flags=cv2.SOLVEPNP_SQPNP
+            )
 
         if not success or inliers is None:
             print(f"  FAILED: PnP did not converge")
@@ -625,20 +660,12 @@ def main():
         next_image_id += 1
         registered_count += 1
 
-    # Write output
+    # Write output in text format (avoids COLMAP 3.14 frames/rigs binary issues)
     print(f"\n{'='*60}")
-    print(f"Writing output to {args.output_path}")
-    write_cameras_binary(cameras, str(output_path / "cameras.bin"))
-    write_images_binary(images, str(output_path / "images.bin"))
-    write_points3D_binary(points3D, str(output_path / "points3D.bin"))
-
-    # Also copy other files if they exist (frames.bin, rigs.bin, project.ini)
-    import shutil
-    model_path = Path(args.model_path)
-    for extra in ["frames.bin", "rigs.bin", "project.ini"]:
-        src = model_path / extra
-        if src.exists():
-            shutil.copy2(str(src), str(output_path / extra))
+    print(f"Writing output to {args.output_path} (text format)")
+    write_cameras_text(cameras, str(output_path / "cameras.txt"))
+    write_images_text(images, str(output_path / "images.txt"))
+    write_points3D_text(points3D, str(output_path / "points3D.txt"))
 
     print(f"\n{'='*60}")
     print(f"Done! Registered {registered_count}/{len(stat_images)} stationary cameras")

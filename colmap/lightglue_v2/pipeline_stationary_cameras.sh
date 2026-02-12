@@ -110,18 +110,26 @@ apptainer exec --nv "$CONTAINER" python3 "$SCRIPT_DIR/register_stationary.py" \
     --output_path "$STAGE2_DIR/sparse/registered" \
     --stationary_dir "$STATIONARY_DIR" \
     --handheld_dir "$HANDHELD_DIR" \
-    --max_keypoint_dist 25 \
+    --max_keypoint_dist 10 \
     --min_correspondences 12 \
-    --pnp_reproj_threshold 8.0 \
+    --pnp_reproj_threshold 4.0 \
     --stationary_max_keypoints 32768 \
     --stationary_detection_threshold 0.0005 \
     --multiscale \
     --scales "0.25,0.5,0.75,1.0,1.5,2.0,3.0"
 
 echo ""
-echo "[2.2] Bundle adjustment (refining all poses)..."
-colmap bundle_adjuster \
+echo "[2.2] Converting text model to binary for bundle adjustment..."
+mkdir -p "$STAGE2_DIR/sparse/registered_bin"
+colmap model_converter \
     --input_path "$STAGE2_DIR/sparse/registered" \
+    --output_path "$STAGE2_DIR/sparse/registered_bin" \
+    --output_type BIN
+
+echo ""
+echo "[2.3] Bundle adjustment (refining all poses)..."
+colmap bundle_adjuster \
+    --input_path "$STAGE2_DIR/sparse/registered_bin" \
     --output_path "$STAGE2_DIR/sparse/optimized" \
     --BundleAdjustment.refine_focal_length 1 \
     --BundleAdjustment.refine_extra_params 1
@@ -139,7 +147,8 @@ colmap model_analyzer --path "$STAGE2_DIR/sparse/optimized"
 
 echo ""
 echo "Stage 1 output (handheld only): $STAGE1_DIR/sparse/"
-echo "Stage 2 registered: $STAGE2_DIR/sparse/registered/"
+echo "Stage 2 registered (text): $STAGE2_DIR/sparse/registered/"
+echo "Stage 2 registered (binary): $STAGE2_DIR/sparse/registered_bin/"
 echo "Stage 2 optimized: $STAGE2_DIR/sparse/optimized/"
 
 rm -f "$LOCAL_CONTAINER"
