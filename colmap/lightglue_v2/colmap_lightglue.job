@@ -12,9 +12,7 @@ request_disk = 20GB
 should_transfer_files = YES
 when_to_transfer_output = ON_EXIT
 
-# handheld and stationary are siblings in ../
-# lightglue_match.py is in ../
-transfer_input_files = ../lightglue_match.py, ../stationary, ../handheld
+transfer_input_files = register_stationary.py, ../stationary, ../handheld
 transfer_output_files = 01_handheld, 02_with_stationary
 
 output = logs/output.log
