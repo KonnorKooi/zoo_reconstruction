@@ -322,6 +322,29 @@ def extract_multiscale(extractor, img_path, device, max_keypoints,
 # Database helpers
 # ============================================================================
 
+def solve_pnp_ransac(pts_3d, pts_2d, K, dist_coeffs, reproj_threshold):
+    """Try multiple PnP solvers, returning the best result."""
+    solvers = [
+        ("SQPNP", cv2.SOLVEPNP_SQPNP),
+        ("EPNP", cv2.SOLVEPNP_EPNP),
+        ("P3P", cv2.SOLVEPNP_P3P),
+    ]
+    for name, flag in solvers:
+        try:
+            success, rvec, tvec, inliers = cv2.solvePnPRansac(
+                pts_3d, pts_2d, K, dist_coeffs,
+                iterationsCount=10000,
+                reprojectionError=reproj_threshold,
+                flags=flag
+            )
+            if success and inliers is not None and len(inliers) > 0:
+                return success, rvec, tvec, inliers
+        except cv2.error as e:
+            print(f"    {name} failed: {e}")
+            continue
+    return False, None, None, None
+
+
 def get_db_image_info(db_path):
     """Get image_id -> name mapping from COLMAP database."""
     conn = sqlite3.connect(db_path)
@@ -566,11 +589,8 @@ def main():
 
             for f_test in focal_candidates:
                 K_test = np.array([[f_test, 0, W_stat/2], [0, f_test, H_stat/2], [0, 0, 1]], dtype=np.float64)
-                success_test, rvec_test, tvec_test, inliers_test = cv2.solvePnPRansac(
-                    pts_3d, pts_2d, K_test, dist_coeffs,
-                    iterationsCount=10000,
-                    reprojectionError=args.pnp_reproj_threshold,
-                    flags=cv2.SOLVEPNP_SQPNP
+                success_test, rvec_test, tvec_test, inliers_test = solve_pnp_ransac(
+                    pts_3d, pts_2d, K_test, dist_coeffs, args.pnp_reproj_threshold
                 )
                 n_inliers = len(inliers_test) if success_test and inliers_test is not None else 0
                 print(f"    f={f_test:.1f}: {n_inliers} inliers")
@@ -589,11 +609,8 @@ def main():
         else:
             # Solve PnP + RANSAC with known intrinsics
             print(f"  Running PnP RANSAC (threshold={args.pnp_reproj_threshold}px)...")
-            success, rvec, tvec, inliers = cv2.solvePnPRansac(
-                pts_3d, pts_2d, K, dist_coeffs,
-                iterationsCount=10000,
-                reprojectionError=args.pnp_reproj_threshold,
-                flags=cv2.SOLVEPNP_SQPNP
+            success, rvec, tvec, inliers = solve_pnp_ransac(
+                pts_3d, pts_2d, K, dist_coeffs, args.pnp_reproj_threshold
             )
 
         if not success or inliers is None:
