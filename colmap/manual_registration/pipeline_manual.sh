@@ -47,7 +47,10 @@ echo ""
 echo "[1.1] Extracting features for handheld images..."
 colmap feature_extractor \
     --database_path "$STAGE1_DIR/database.db" \
-    --image_path "$HANDHELD_DIR"
+    --image_path "$HANDHELD_DIR" \
+    --SiftExtraction.max_num_features 16384 \
+    --SiftExtraction.peak_threshold 0.004 \
+    --SiftExtraction.edge_threshold 16
 
 echo ""
 echo "[1.2] Matching handheld images..."
@@ -59,7 +62,10 @@ echo "[1.3] Reconstructing handheld images..."
 colmap mapper \
     --database_path "$STAGE1_DIR/database.db" \
     --image_path "$HANDHELD_DIR" \
-    --output_path "$STAGE1_DIR/sparse"
+    --output_path "$STAGE1_DIR/sparse" \
+    --Mapper.filter_max_reproj_error 2.0 \
+    --Mapper.min_num_matches 10 \
+    --Mapper.ba_use_gpu 1
 
 # Report all models
 echo ""

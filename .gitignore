@@ -60,3 +60,5 @@ colmap-lightglue/logs/*
 colmap/manual_registration/old_runs/*
 
 colmap/manual_registration/old_runs
+colmap/manual_registration/output/*
+colmap/manual_registration/output/
