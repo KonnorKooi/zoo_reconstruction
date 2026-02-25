@@ -175,27 +175,27 @@ def rotmat_to_qvec(R):
     return qvec
 
 
-def solve_pnp_ransac(pts_3d, pts_2d, K, dist_coeffs, reproj_threshold):
-    """Try multiple PnP solvers, returning the best result."""
+def solve_pnp(pts_3d, pts_2d, K, dist_coeffs):
+    """Try multiple PnP solvers on all correspondences (no RANSAC).
+
+    Manual correspondences are assumed correct, so we use all points directly.
+    """
     solvers = [
         ("SQPNP", cv2.SOLVEPNP_SQPNP),
         ("EPNP", cv2.SOLVEPNP_EPNP),
-        ("P3P", cv2.SOLVEPNP_P3P),
+        ("ITERATIVE", cv2.SOLVEPNP_ITERATIVE),
     ]
     for name, flag in solvers:
         try:
-            success, rvec, tvec, inliers = cv2.solvePnPRansac(
-                pts_3d, pts_2d, K, dist_coeffs,
-                iterationsCount=10000,
-                reprojectionError=reproj_threshold,
-                flags=flag
+            success, rvec, tvec = cv2.solvePnP(
+                pts_3d, pts_2d, K, dist_coeffs, flags=flag
             )
-            if success and inliers is not None and len(inliers) > 0:
-                return success, rvec, tvec, inliers
+            if success:
+                return success, rvec, tvec
         except cv2.error as e:
             print(f"    {name} failed: {e}")
             continue
-    return False, None, None, None
+    return False, None, None
 
 
 # ============================================================================
@@ -208,7 +208,7 @@ def main():
     parser.add_argument('--correspondences', required=True, help='JSON file with manual 2D-3D correspondences')
     parser.add_argument('--output_path', required=True, help='Output path for updated reconstruction (text format)')
     parser.add_argument('--stationary_dir', required=True, help='Directory with stationary camera images')
-    parser.add_argument('--pnp_reproj_threshold', type=float, default=8.0, help='RANSAC reprojection threshold in pixels')
+    parser.add_argument('--max_reproj_error', type=float, default=50.0, help='Maximum mean reprojection error (px) to accept a pose')
     args = parser.parse_args()
 
     # Load COLMAP reconstruction
@@ -270,42 +270,46 @@ def main():
         W, H = img.size
         print(f"  Image size: {W}x{H}")
 
-        # Try multiple focal lengths
+        # Try many focal lengths at fine granularity.
+        # solvePnP is cheap so we can afford a dense sweep.
         focal_candidates = [
-            max(W, H) * f for f in [0.5, 0.7, 0.85, 1.0, 1.2, 1.5, 2.0]
+            max(W, H) * f for f in np.arange(0.3, 3.05, 0.05)
         ]
         dist_coeffs = np.zeros(4)
 
         print(f"  Trying {len(focal_candidates)} focal lengths...")
         best_f = None
-        best_inlier_count = 0
+        best_error = float("inf")
         best_result = None
 
         for f_test in focal_candidates:
             K_test = np.array([[f_test, 0, W/2], [0, f_test, H/2], [0, 0, 1]], dtype=np.float64)
-            success, rvec, tvec, inliers = solve_pnp_ransac(
-                pts_3d, pts_2d, K_test, dist_coeffs, args.pnp_reproj_threshold
-            )
-            n_inliers = len(inliers) if success and inliers is not None else 0
-            print(f"    f={f_test:.1f}: {n_inliers}/{len(pts_2d)} inliers")
-            if n_inliers > best_inlier_count:
-                best_inlier_count = n_inliers
+            success, rvec, tvec = solve_pnp(pts_3d, pts_2d, K_test, dist_coeffs)
+            if not success:
+                print(f"    f={f_test:.1f}: solver failed")
+                continue
+            projected, _ = cv2.projectPoints(pts_3d, rvec, tvec, K_test, dist_coeffs)
+            err = np.mean(np.linalg.norm(projected.reshape(-1, 2) - pts_2d, axis=1))
+            print(f"    f={f_test:.1f}: mean reproj error={err:.2f}px")
+            if err < best_error:
+                best_error = err
                 best_f = f_test
-                best_result = (success, rvec, tvec, inliers)
+                best_result = (rvec, tvec)
 
-        if best_f is None or best_inlier_count < 4:
-            print(f"  FAILED: No focal length produced enough inliers")
+        if best_f is None:
+            print(f"  FAILED: All solvers failed")
+            continue
+        if best_error > args.max_reproj_error:
+            print(f"  FAILED: Best reprojection error {best_error:.2f}px exceeds threshold {args.max_reproj_error}px")
             continue
 
         K = np.array([[best_f, 0, W/2], [0, best_f, H/2], [0, 0, 1]], dtype=np.float64)
-        success, rvec, tvec, inliers = best_result
-        print(f"  Best focal length: {best_f:.1f} ({best_inlier_count} inliers)")
+        rvec, tvec = best_result
+        print(f"  Best focal length: {best_f:.1f} (mean reproj error={best_error:.2f}px)")
 
-        # Refine with inliers
+        # Refine using all manual correspondences
         rvec_refined, tvec_refined = cv2.solvePnPRefineLM(
-            pts_3d[inliers.flatten()],
-            pts_2d[inliers.flatten()],
-            K, dist_coeffs, rvec, tvec
+            pts_3d, pts_2d, K, dist_coeffs, rvec, tvec
         )
 
         # Convert to COLMAP format
@@ -314,26 +318,18 @@ def main():
         tvec_colmap = tvec_refined.flatten()
         print(f"  Pose: qvec={qvec}, tvec={tvec_colmap}")
 
-        # Reprojection error
-        projected, _ = cv2.projectPoints(
-            pts_3d[inliers.flatten()], rvec_refined, tvec_refined, K, dist_coeffs)
-        reproj_error = np.mean(np.linalg.norm(
-            projected.reshape(-1, 2) - pts_2d[inliers.flatten()], axis=1))
-        print(f"  Mean reprojection error: {reproj_error:.2f}px")
+        # Reprojection error after refinement (all correspondences)
+        projected, _ = cv2.projectPoints(pts_3d, rvec_refined, tvec_refined, K, dist_coeffs)
+        reproj_error = np.mean(np.linalg.norm(projected.reshape(-1, 2) - pts_2d, axis=1))
+        print(f"  Mean reprojection error (refined, all pts): {reproj_error:.2f}px")
 
         # Add camera (SIMPLE_PINHOLE)
         new_cam_id = max(cameras.keys()) + 1 if cameras else 1
         cameras[new_cam_id] = Camera(new_cam_id, 0, W, H, (best_f, W/2, H/2))
 
-        # Add image with inlier observations (no point3D links since these are manual)
-        inlier_mask = np.zeros(len(pts_2d), dtype=bool)
-        inlier_mask[inliers.flatten()] = True
-        xys = []
-        p3d_ids_for_img = []
-        for i in range(len(pts_2d)):
-            if inlier_mask[i]:
-                xys.append([pts_2d[i][0], pts_2d[i][1]])
-                p3d_ids_for_img.append(-1)  # No 3D point link
+        # Add image with all manual correspondences as observations (no point3D links)
+        xys = [[pts_2d[i][0], pts_2d[i][1]] for i in range(len(pts_2d))]
+        p3d_ids_for_img = [-1] * len(pts_2d)  # No 3D point links
 
         images[next_image_id] = ImageEntry(
             next_image_id, tuple(qvec), tuple(tvec_colmap),
