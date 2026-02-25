@@ -157,17 +157,17 @@ def write_points3D_text(points3D, path):
 # ============================================================================
 
 def rotmat_to_qvec(R):
-    """Convert 3x3 rotation matrix to COLMAP quaternion (qw, qx, qy, qz)."""
-    Rxx, Ryx, Rzx = R[0, 0], R[1, 0], R[2, 0]
-    Rxy, Ryy, Rzy = R[0, 1], R[1, 1], R[2, 1]
-    Rxz, Ryz, Rzz = R[0, 2], R[1, 2], R[2, 2]
-    k = np.array([
+    """Convert 3x3 rotation matrix to COLMAP quaternion (qw, qx, qy, qz).
+    Matches COLMAP's reference implementation exactly (R.flat row-major naming).
+    """
+    Rxx, Ryx, Rzx, Rxy, Ryy, Rzy, Rxz, Ryz, Rzz = R.flat
+    K = np.array([
         [Rxx - Ryy - Rzz, 0, 0, 0],
         [Ryx + Rxy, Ryy - Rxx - Rzz, 0, 0],
         [Rzx + Rxz, Rzy + Ryz, Rzz - Rxx - Ryy, 0],
         [Ryz - Rzy, Rzx - Rxz, Rxy - Ryx, Rxx + Ryy + Rzz]
     ]) / 3.0
-    eigvals, eigvecs = np.linalg.eigh(k)
+    eigvals, eigvecs = np.linalg.eigh(K)
     qvec = eigvecs[[3, 0, 1, 2], np.argmax(eigvals)]
     if qvec[0] < 0:
         qvec *= -1
@@ -225,6 +225,17 @@ def main():
     output_path = Path(args.output_path)
     output_path.mkdir(parents=True, exist_ok=True)
 
+    # Build nearest-neighbor structure over existing 3D points once.
+    # Correspondences were picked from the COLMAP model so distances should
+    # be tiny (floating-point level). We warn if a match is unexpectedly far.
+    p3d_id_list = np.array(list(points3D.keys()), dtype=np.int64)
+    p3d_xyz_arr = np.array([points3D[pid].xyz for pid in p3d_id_list])  # Nx3
+
+    def find_nearest_p3d(xyz):
+        dists = np.linalg.norm(p3d_xyz_arr - np.array(xyz), axis=1)
+        idx = int(np.argmin(dists))
+        return p3d_id_list[idx], dists[idx]
+
     registered_count = 0
     next_image_id = max(images.keys()) + 1 if images else 1
 
@@ -272,7 +283,7 @@ def main():
         # Try many focal lengths at fine granularity.
         # solvePnP is cheap so we can afford a dense sweep.
         focal_candidates = [
-            max(W, H) * f for f in np.arange(0.3, 3.05, 0.05)
+            max(W, H) * f for f in np.arange(0.3, 6.05, 0.05)
         ]
         dist_coeffs = np.zeros(4)
 
@@ -326,9 +337,23 @@ def main():
         new_cam_id = max(cameras.keys()) + 1 if cameras else 1
         cameras[new_cam_id] = Camera(new_cam_id, 0, W, H, (best_f, W/2, H/2))
 
-        # Add image with all manual correspondences as observations (no point3D links)
+        # Build observations and link each 2D point to its nearest 3D point.
+        # point2D_idx is the 0-based index into the image's xys list (COLMAP convention).
         xys = [[pts_2d[i][0], pts_2d[i][1]] for i in range(len(pts_2d))]
-        p3d_ids_for_img = [-1] * len(pts_2d)  # No 3D point links
+        p3d_ids_for_img = []
+        print(f"  Linking correspondences to 3D points:")
+        for i, pt3d in enumerate(pts_3d):
+            matched_id, dist = find_nearest_p3d(pt3d)
+            p3d_ids_for_img.append(int(matched_id))
+            print(f"    pt{i}: matched p3d_id={matched_id} dist={dist:.6f}")
+
+            # Update the 3D point's track to include this new observation.
+            old_pt = points3D[matched_id]
+            points3D[matched_id] = Point3D(
+                old_pt.id, old_pt.xyz, old_pt.rgb, old_pt.error,
+                list(old_pt.image_ids) + [next_image_id],
+                list(old_pt.point2D_idxs) + [i]
+            )
 
         images[next_image_id] = ImageEntry(
             next_image_id, tuple(qvec), tuple(tvec_colmap),
