@@ -17,7 +17,6 @@ import struct
 import numpy as np
 from pathlib import Path
 from collections import namedtuple
-from PIL import Image as PILImage
 import cv2
 
 
@@ -266,8 +265,8 @@ def main():
                 print(f"  WARNING: Image not found at {stat_img_path}")
                 continue
 
-        img = PILImage.open(stat_img_path)
-        W, H = img.size
+        img = cv2.imread(str(stat_img_path))
+        H, W = img.shape[:2]
         print(f"  Image size: {W}x{H}")
 
         # Try many focal lengths at fine granularity.

@@ -99,7 +99,7 @@ mkdir -p "$STAGE2_DIR/sparse/optimized"
 
 echo ""
 echo "[2.1] Running manual PnP registration..."
-python3 "$SCRIPT_DIR/register_manual.py" \
+apptainer exec --nv "$CONTAINER" python3 "$SCRIPT_DIR/register_manual.py" \
     --model_path "$BEST_MODEL" \
     --correspondences "$SCRIPT_DIR/correspondences.json" \
     --output_path "$STAGE2_DIR/sparse/registered" \
