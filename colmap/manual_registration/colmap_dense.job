@@ -1,6 +1,6 @@
 universe = vanilla
 executable = pipeline_dense.sh
-arguments = ./registered_bin ./images ./dense
+arguments = ./registered ./images ./dense
 
 initialdir = /cluster/research-groups/wehrwein/zoo/konnor/colmap/zoo_reconstruction/colmap/manual_registration
 
@@ -17,8 +17,7 @@ request_disk = 200GB
 should_transfer_files = YES
 when_to_transfer_output = ON_EXIT
 
-# Transfers the registered sparse model (binary) and all images to the worker
-transfer_input_files = output/registered_bin, sparse/1/images
+transfer_input_files = output/registered, sparse/1/images
 
 # Only transfer back the final outputs (depth maps are huge — skip them)
 transfer_output_files = dense/fused.ply, dense/meshed-poisson.ply
