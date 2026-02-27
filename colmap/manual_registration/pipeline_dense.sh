@@ -15,7 +15,7 @@ LOCAL_CONTAINER="/tmp/colmap_$$.sif"
 NFS_SPARSE="/cluster/research-groups/wehrwein/zoo/konnor/colmap/zoo_reconstruction/colmap/manual_registration/sparse/1"
 
 # Sandbox paths — images are transferred here by HTCondor, bin files copied below
-SPARSE_DIR="$SANDBOX/sparse/1"
+SPARSE_DIR="$SANDBOX/1"   # HTCondor transfers sparse/1 using basename → sandbox/1/
 DENSE_DIR="$SANDBOX/dense"
 # ─────────────────────────────────────────────────────────────────────────────
 
