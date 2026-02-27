@@ -1,6 +1,6 @@
 universe = vanilla
 executable = pipeline_dense.sh
-arguments = --workspace ./sparse/1
+arguments = ./sparse/1
 
 initialdir = /cluster/research-groups/wehrwein/zoo/konnor/colmap/zoo_reconstruction/colmap/manual_registration
 
@@ -8,6 +8,7 @@ initialdir = /cluster/research-groups/wehrwein/zoo/konnor/colmap/zoo_reconstruct
 # H100: 80 GB VRAM, max 16 CPUs, ~502 GB RAM
 +WantH100 = True
 +WantPreempt = True
+gpus_minimum_memory = 80000
 
 request_cpus = 16
 request_memory = 96GB
@@ -17,10 +18,11 @@ request_disk = 200GB
 should_transfer_files = YES
 when_to_transfer_output = ON_EXIT
 
-# Transfer the already-prepared MVS workspace (image_undistorter already run locally)
+# Transfer the prepared workspace (images/, sparse/, stereo/patch-match.cfg)
+# Depth maps are generated on the compute node and NOT transferred back
 transfer_input_files = sparse/1
 
-# Only transfer back the final outputs (depth maps are huge — skip them)
+# Only transfer back final outputs — depth/normal maps are huge, leave them on node
 transfer_output_files = sparse/1/fused.ply, sparse/1/meshed-poisson.ply
 
 output = logs/dense_output.log

@@ -1,13 +1,14 @@
 #!/bin/bash
 set -e
 
-# Dense reconstruction from existing sparse model OR pre-built workspace.
+# Dense reconstruction from a prepared COLMAP MVS workspace.
+# Cleans up any previous run's intermediate files before starting.
 #
-# Usage — full pipeline (runs image_undistorter then MVS):
-#   ./pipeline_dense.sh <sparse_model_path> <handheld_dir> <stationary_dir> [dense_output_dir]
+# Usage: ./pipeline_dense.sh <workspace_dir> [dense_output_dir]
 #
-# Usage — workspace mode (image_undistorter already run, skip straight to MVS):
-#   ./pipeline_dense.sh --workspace <workspace_dir>
+# <workspace_dir>   path to the COLMAP workspace produced by image_undistorter
+#                   (must contain images/, sparse/, stereo/patch-match.cfg)
+# [dense_output_dir] optional override for output; defaults to <workspace_dir>
 
 # Container setup
 LOCAL_CONTAINER="/tmp/colmap_$$.sif"
@@ -17,66 +18,54 @@ colmap() {
     apptainer exec --nv "$CONTAINER" colmap "$@"
 }
 
-SKIP_UNDISTORT=0
+WORKSPACE="${1:?Usage: $0 <workspace_dir>}"
+DENSE_DIR="${2:-$WORKSPACE}"
 
-if [ "$1" = "--workspace" ]; then
-    DENSE_DIR="${2:?Usage: $0 --workspace <workspace_dir>}"
-    SKIP_UNDISTORT=1
-    echo "============================================================================"
-    echo "Dense Reconstruction Pipeline (max quality) — workspace mode"
-    echo "  workspace : $DENSE_DIR"
-    echo "============================================================================"
-else
-    SPARSE_PATH="${1:?Usage: $0 <sparse_model_path> <handheld_dir> <stationary_dir> [dense_output_dir]}"
-    HANDHELD_DIR="${2:?Usage: $0 <sparse_model_path> <handheld_dir> <stationary_dir> [dense_output_dir]}"
-    STATIONARY_DIR="${3:?Usage: $0 <sparse_model_path> <handheld_dir> <stationary_dir> [dense_output_dir]}"
-    DENSE_DIR="${4:-./dense}"
+echo "============================================================================"
+echo "Dense Reconstruction Pipeline (max quality)"
+echo "  workspace : $WORKSPACE"
+echo "  output    : $DENSE_DIR"
+echo "============================================================================"
 
-    # Combine handheld and stationary into one flat directory (model references all by filename only)
-    IMAGE_PATH="./all_images"
-    mkdir -p "$IMAGE_PATH"
-    cp "$HANDHELD_DIR"/* "$IMAGE_PATH/"
-    cp "$STATIONARY_DIR"/* "$IMAGE_PATH/"
-
-    mkdir -p "$DENSE_DIR"
-
-    echo "============================================================================"
-    echo "Dense Reconstruction Pipeline (max quality)"
-    echo "  sparse model : $SPARSE_PATH"
-    echo "  handheld     : $HANDHELD_DIR"
-    echo "  stationary   : $STATIONARY_DIR"
-    echo "  output       : $DENSE_DIR"
-    echo "============================================================================"
+# Guard: sparse/ subdir must have a valid camera model — if missing, the job
+# was likely submitted before committing sparse/1/sparse/*.bin to git.
+if [ ! -f "$WORKSPACE/sparse/cameras.bin" ]; then
+    echo ""
+    echo "ERROR: $WORKSPACE/sparse/cameras.bin not found."
+    echo "Commit sparse/1/sparse/*.bin to git and re-push before submitting."
+    exit 1
 fi
 
-# Step 1 — undistort images at full resolution, use more source images per view
-if [ "$SKIP_UNDISTORT" -eq 0 ]; then
-    echo ""
-    echo "=== [1/4] Image undistortion ==="
-    colmap image_undistorter \
-        --image_path "$IMAGE_PATH" \
-        --input_path "$SPARSE_PATH" \
-        --output_path "$DENSE_DIR" \
-        --output_type COLMAP \
-        --max_image_size -1 \
-        --num_patch_match_src_images 40
-else
-    echo ""
-    echo "=== [1/4] Image undistortion — SKIPPED (workspace already prepared) ==="
-fi
+# Wipe previous run's intermediates so we always start clean
+echo ""
+echo "=== [1/3] Cleaning up previous outputs ==="
+# Ensure stereo subdirs exist (HTCondor doesn't transfer empty directories)
+mkdir -p "$WORKSPACE/stereo/depth_maps" \
+         "$WORKSPACE/stereo/normal_maps" \
+         "$WORKSPACE/stereo/consistency_graphs"
+rm -f  "$WORKSPACE/stereo/depth_maps"/*.bin \
+       "$WORKSPACE/stereo/depth_maps"/*.jpg \
+       "$WORKSPACE/stereo/depth_maps"/*.png
+rm -f  "$WORKSPACE/stereo/normal_maps"/*.bin \
+       "$WORKSPACE/stereo/normal_maps"/*.jpg \
+       "$WORKSPACE/stereo/normal_maps"/*.png
+rm -f  "$WORKSPACE/stereo/consistency_graphs"/*.bin
+rm -f  "$DENSE_DIR/fused.ply"
+rm -f  "$DENSE_DIR/meshed-poisson.ply"
+echo "    done."
 
 # Step 2 — patch match stereo (GPU)
 #   window_radius=5       patch size (5 = fine detail, larger = smoother)
 #   window_step=1         sample every pixel (max density)
-#   num_samples=20        random hypotheses per pixel (up from 15)
-#   num_iterations=8      propagation iterations (up from 5)
-#   geom_consistency=1    cross-view depth consistency check (on by default)
-#   filter_min_num_consistent=2  keep points seen in >=2 views (completeness)
+#   num_samples=20        random hypotheses per pixel
+#   num_iterations=8      propagation iterations
+#   geom_consistency=1    cross-view depth consistency check
+#   filter_min_num_consistent=2  keep points seen in >=2 views
 #   cache_size=64         raise from 32 to use available RAM
 echo ""
-echo "=== [2/4] Patch match stereo (MVS) ==="
+echo "=== [2/3] Patch match stereo (MVS) ==="
 colmap patch_match_stereo \
-    --workspace_path "$DENSE_DIR" \
+    --workspace_path "$WORKSPACE" \
     --workspace_format COLMAP \
     --PatchMatchStereo.max_image_size -1 \
     --PatchMatchStereo.window_radius 5 \
@@ -93,16 +82,16 @@ colmap patch_match_stereo \
     --PatchMatchStereo.cache_size 64
 
 # Step 3 — fuse depth maps into dense point cloud
-#   min_num_pixels=3      keep points visible in >=3 views (down from 5, more complete)
-#   max_reproj_error=1    tighter reprojection filter (down from 2, more accurate)
+#   min_num_pixels=3      keep points visible in >=3 views (more complete)
+#   max_reproj_error=1    tight reprojection filter (more accurate)
 #   max_depth_error=0.01  tight depth consistency
 #   max_normal_error=10   normal consistency threshold
 #   check_num_images=50   check consistency across up to 50 images
 #   cache_size=64         raise from 32
 echo ""
-echo "=== [3/4] Stereo fusion ==="
+echo "=== [3/3] Stereo fusion + Poisson mesh ==="
 colmap stereo_fusion \
-    --workspace_path "$DENSE_DIR" \
+    --workspace_path "$WORKSPACE" \
     --workspace_format COLMAP \
     --input_type geometric \
     --output_path "$DENSE_DIR/fused.ply" \
@@ -117,11 +106,11 @@ colmap stereo_fusion \
     --StereoFusion.cache_size 64
 
 # Step 4 — Poisson mesh
-#   depth=14              octree depth for mesh resolution (up from 13)
-#   trim=7                trim loose surfaces less aggressively (down from 10)
+#   depth=14              octree depth for mesh resolution
+#   trim=7                trim loose surfaces
 #   num_threads=-1        use all available cores
 echo ""
-echo "=== [4/4] Poisson meshing ==="
+echo "=== Poisson meshing ==="
 colmap poisson_mesher \
     --input_path "$DENSE_DIR/fused.ply" \
     --output_path "$DENSE_DIR/meshed-poisson.ply" \
