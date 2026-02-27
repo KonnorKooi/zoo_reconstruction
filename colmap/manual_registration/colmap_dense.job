@@ -9,14 +9,16 @@ request_memory = 96GB
 request_gpus = 1
 request_disk = 200GB
 
+# HTCondor copies everything from NFS to execute node's local SSD once at start,
+# then COLMAP runs entirely on /scratch_ssd — no NFS load during compute.
 should_transfer_files = YES
 when_to_transfer_output = ON_EXIT
 
-# Transfer the prepared workspace (images/, sparse/, stereo/patch-match.cfg)
-# Depth maps are generated on the compute node and NOT transferred back
+# sparse/1 must exist on cluster NFS first — rsync it before submitting:
+#   rsync -avz sparse/1/ kooik2@csci-head:...initialdir/sparse/1/
 transfer_input_files = sparse/1
 
-# Only transfer back final outputs — depth/normal maps are huge, leave them on node
+# Only copy back the final outputs — depth/normal maps stay on execute node
 transfer_output_files = sparse/1/fused.ply, sparse/1/meshed-poisson.ply
 
 output = logs/dense_output.log
