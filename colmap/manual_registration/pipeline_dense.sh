@@ -1,8 +1,13 @@
 #!/bin/bash
 set -e
 
-# Dense reconstruction from existing sparse model
-# Usage: ./pipeline_dense.sh <sparse_model_path> <image_path> <dense_output_dir>
+# Dense reconstruction from existing sparse model OR pre-built workspace.
+#
+# Usage — full pipeline (runs image_undistorter then MVS):
+#   ./pipeline_dense.sh <sparse_model_path> <handheld_dir> <stationary_dir> [dense_output_dir]
+#
+# Usage — workspace mode (image_undistorter already run, skip straight to MVS):
+#   ./pipeline_dense.sh --workspace <workspace_dir>
 
 # Container setup
 LOCAL_CONTAINER="/tmp/colmap_$$.sif"
@@ -12,29 +17,53 @@ colmap() {
     apptainer exec --nv "$CONTAINER" colmap "$@"
 }
 
-SPARSE_PATH="${1:?Usage: $0 <sparse_model_path> <image_path> <dense_output_dir>}"
-IMAGE_PATH="${2:?Usage: $0 <sparse_model_path> <image_path> <dense_output_dir>}"
-DENSE_DIR="${3:-./dense}"
+SKIP_UNDISTORT=0
 
-mkdir -p "$DENSE_DIR"
+if [ "$1" = "--workspace" ]; then
+    DENSE_DIR="${2:?Usage: $0 --workspace <workspace_dir>}"
+    SKIP_UNDISTORT=1
+    echo "============================================================================"
+    echo "Dense Reconstruction Pipeline (max quality) — workspace mode"
+    echo "  workspace : $DENSE_DIR"
+    echo "============================================================================"
+else
+    SPARSE_PATH="${1:?Usage: $0 <sparse_model_path> <handheld_dir> <stationary_dir> [dense_output_dir]}"
+    HANDHELD_DIR="${2:?Usage: $0 <sparse_model_path> <handheld_dir> <stationary_dir> [dense_output_dir]}"
+    STATIONARY_DIR="${3:?Usage: $0 <sparse_model_path> <handheld_dir> <stationary_dir> [dense_output_dir]}"
+    DENSE_DIR="${4:-./dense}"
 
-echo "============================================================================"
-echo "Dense Reconstruction Pipeline (max quality)"
-echo "  sparse model : $SPARSE_PATH"
-echo "  images       : $IMAGE_PATH"
-echo "  output       : $DENSE_DIR"
-echo "============================================================================"
+    # Combine handheld and stationary into one flat directory (model references all by filename only)
+    IMAGE_PATH="./all_images"
+    mkdir -p "$IMAGE_PATH"
+    cp "$HANDHELD_DIR"/* "$IMAGE_PATH/"
+    cp "$STATIONARY_DIR"/* "$IMAGE_PATH/"
+
+    mkdir -p "$DENSE_DIR"
+
+    echo "============================================================================"
+    echo "Dense Reconstruction Pipeline (max quality)"
+    echo "  sparse model : $SPARSE_PATH"
+    echo "  handheld     : $HANDHELD_DIR"
+    echo "  stationary   : $STATIONARY_DIR"
+    echo "  output       : $DENSE_DIR"
+    echo "============================================================================"
+fi
 
 # Step 1 — undistort images at full resolution, use more source images per view
-echo ""
-echo "=== [1/4] Image undistortion ==="
-colmap image_undistorter \
-    --image_path "$IMAGE_PATH" \
-    --input_path "$SPARSE_PATH" \
-    --output_path "$DENSE_DIR" \
-    --output_type COLMAP \
-    --max_image_size -1 \
-    --num_patch_match_src_images 40
+if [ "$SKIP_UNDISTORT" -eq 0 ]; then
+    echo ""
+    echo "=== [1/4] Image undistortion ==="
+    colmap image_undistorter \
+        --image_path "$IMAGE_PATH" \
+        --input_path "$SPARSE_PATH" \
+        --output_path "$DENSE_DIR" \
+        --output_type COLMAP \
+        --max_image_size -1 \
+        --num_patch_match_src_images 40
+else
+    echo ""
+    echo "=== [1/4] Image undistortion — SKIPPED (workspace already prepared) ==="
+fi
 
 # Step 2 — patch match stereo (GPU)
 #   window_radius=5       patch size (5 = fine detail, larger = smoother)

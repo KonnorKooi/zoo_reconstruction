@@ -1,6 +1,6 @@
 universe = vanilla
 executable = pipeline_dense.sh
-arguments = ./registered ./images ./dense
+arguments = --workspace ./sparse/1
 
 initialdir = /cluster/research-groups/wehrwein/zoo/konnor/colmap/zoo_reconstruction/colmap/manual_registration
 
@@ -17,10 +17,11 @@ request_disk = 200GB
 should_transfer_files = YES
 when_to_transfer_output = ON_EXIT
 
-transfer_input_files = output/registered, sparse/1/images
+# Transfer the already-prepared MVS workspace (image_undistorter already run locally)
+transfer_input_files = sparse/1
 
 # Only transfer back the final outputs (depth maps are huge — skip them)
-transfer_output_files = dense/fused.ply, dense/meshed-poisson.ply
+transfer_output_files = sparse/1/fused.ply, sparse/1/meshed-poisson.ply
 
 output = logs/dense_output.log
 error  = logs/dense_error.log
