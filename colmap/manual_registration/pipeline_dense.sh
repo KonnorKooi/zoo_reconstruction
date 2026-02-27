@@ -5,57 +5,68 @@ set -e
 # Designed to run as an HTCondor job on the CSCI cluster.
 # No arguments needed — all paths are absolute and hardcoded below.
 
-# ── Absolute paths ────────────────────────────────────────────────────────────
+# ── Paths ──────────────────────────────────────────────────────────────────────
 SANDBOX="$(pwd)"   # HTCondor scratch SSD: /scratch_ssd/condor/execute/dir_XXXX
 
-CONTAINER_SRC="/cluster/research-groups/wehrwein/zoo/containers/colmap.sif"
-LOCAL_CONTAINER="/tmp/colmap_$$.sif"
+# HTCondor transfers all inputs to sandbox root (basename destination):
+#   colmap.sif, cameras.bin, images.bin, points3D.bin, images/
+LOCAL_CONTAINER="$SANDBOX/colmap.sif"
 
-# Sparse model on NFS — bin files fetched once at job start (small sequential read)
+# NFS paths — fallback only if cluster .bin-skip quirk prevents file transfer
+NFS_CONTAINER="/cluster/research-groups/wehrwein/zoo/containers/colmap.sif"
 NFS_SPARSE="/cluster/research-groups/wehrwein/zoo/konnor/colmap/zoo_reconstruction/colmap/manual_registration/sparse/1"
 
-# Sandbox paths — images are transferred here by HTCondor, bin files copied below
-SPARSE_DIR="$SANDBOX/1"   # HTCondor transfers sparse/1 using basename → sandbox/1/
+# SPARSE_DIR = sandbox root: bin files land here, images/ subdir lands here too
+SPARSE_DIR="$SANDBOX"
 DENSE_DIR="$SANDBOX/dense"
-# ─────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 
 echo "============================================================================"
 echo "Dense Reconstruction Pipeline"
 echo "  sandbox   : $SANDBOX"
 echo "  sparse    : $SPARSE_DIR"
-echo "  nfs model : $NFS_SPARSE"
 echo "  output    : $DENSE_DIR"
 echo "============================================================================"
 
-# Copy container to local SSD (faster than reading from NFS during exec)
+# ── [0/3] Container ────────────────────────────────────────────────────────────
 echo ""
-echo "=== [0/4] Staging container ==="
-cp "$CONTAINER_SRC" "$LOCAL_CONTAINER"
+echo "=== [0/3] Verifying container ==="
+CLEANUP_CONTAINER=0
+if [ ! -f "$LOCAL_CONTAINER" ]; then
+    echo "    colmap.sif not in sandbox — NFS fallback (transfer may have failed)"
+    LOCAL_CONTAINER="/tmp/colmap_$$.sif"
+    cp "$NFS_CONTAINER" "$LOCAL_CONTAINER"
+    CLEANUP_CONTAINER=1
+fi
 colmap() { apptainer exec --nv "$LOCAL_CONTAINER" colmap "$@"; }
+echo "    container: $LOCAL_CONTAINER"
 
-# HTCondor transfers images/ subdir but skips top-level .bin files (cluster quirk).
-# Copy the 3 small model files from NFS once — one-time sequential read, negligible load.
+# ── Verify sparse model on SSD ─────────────────────────────────────────────────
 echo ""
-echo "=== [1/4] Fetching sparse model from NFS ==="
-mkdir -p "$SPARSE_DIR"
-cp "$NFS_SPARSE/cameras.bin"  "$SPARSE_DIR/cameras.bin"
-cp "$NFS_SPARSE/images.bin"   "$SPARSE_DIR/images.bin"
-cp "$NFS_SPARSE/points3D.bin" "$SPARSE_DIR/points3D.bin"
+echo "=== Verifying sparse model ==="
+# Bin files should be in sandbox from HTCondor transfer; fall back to NFS if cluster
+# .bin-skip quirk still applies to explicit file listings.
+for f in cameras.bin images.bin points3D.bin; do
+    if [ ! -f "$SPARSE_DIR/$f" ]; then
+        echo "    $f not in sandbox — NFS fallback"
+        cp "$NFS_SPARSE/$f" "$SPARSE_DIR/$f"
+    fi
+done
 
-# Sanity checks
-[ -f "$SPARSE_DIR/cameras.bin" ] || { echo "ERROR: cameras.bin missing after NFS copy"; exit 1; }
-[ -d "$SPARSE_DIR/images"      ] || { echo "ERROR: images/ not found — HTCondor transfer failed"; exit 1; }
-echo "    sparse model ready."
+[ -f "$SPARSE_DIR/cameras.bin"  ] || { echo "ERROR: cameras.bin missing"; exit 1; }
+[ -f "$SPARSE_DIR/images.bin"   ] || { echo "ERROR: images.bin missing"; exit 1; }
+[ -f "$SPARSE_DIR/points3D.bin" ] || { echo "ERROR: points3D.bin missing"; exit 1; }
+[ -d "$SPARSE_DIR/images"       ] || { echo "ERROR: images/ not found — HTCondor transfer failed"; exit 1; }
+echo "    all inputs on local SSD."
 
 # Wipe any previous dense output and start clean
 rm -rf "$DENSE_DIR"
 mkdir -p "$DENSE_DIR"
 
-# Step 2 — undistort images and generate stereo workspace configs
-#   cameras are already pinhole so this mainly generates patch-match.cfg
-#   num_patch_match_src_images=40  more source views → better depth estimates
+# ── [1/3] Image undistortion ───────────────────────────────────────────────────
+# cameras are already pinhole so this mainly generates patch-match.cfg
 echo ""
-echo "=== [2/4] Image undistortion ==="
+echo "=== [1/3] Image undistortion ==="
 colmap image_undistorter \
     --image_path    "$SPARSE_DIR/images" \
     --input_path    "$SPARSE_DIR" \
@@ -64,9 +75,9 @@ colmap image_undistorter \
     --max_image_size -1 \
     --num_patch_match_src_images 40
 
-# Step 3 — patch match stereo (GPU)
+# ── [2/3] Patch match stereo (GPU) ────────────────────────────────────────────
 echo ""
-echo "=== [3/4] Patch match stereo (MVS) ==="
+echo "=== [2/3] Patch match stereo (MVS) ==="
 colmap patch_match_stereo \
     --workspace_path "$DENSE_DIR" \
     --workspace_format COLMAP \
@@ -84,9 +95,9 @@ colmap patch_match_stereo \
     --PatchMatchStereo.filter_min_num_consistent 2 \
     --PatchMatchStereo.cache_size 64
 
-# Step 4 — fuse depth maps then Poisson mesh
+# ── [3/3] Stereo fusion + Poisson mesh ────────────────────────────────────────
 echo ""
-echo "=== [4/4] Stereo fusion + Poisson mesh ==="
+echo "=== [3/3] Stereo fusion + Poisson mesh ==="
 colmap stereo_fusion \
     --workspace_path "$DENSE_DIR" \
     --workspace_format COLMAP \
@@ -117,4 +128,4 @@ echo "  point cloud : $DENSE_DIR/fused.ply"
 echo "  mesh        : $DENSE_DIR/meshed-poisson.ply"
 echo "============================================================================"
 
-rm -f "$LOCAL_CONTAINER"
+[ "$CLEANUP_CONTAINER" = "1" ] && rm -f "$LOCAL_CONTAINER"

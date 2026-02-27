@@ -11,11 +11,21 @@ request_disk   = 200GB
 should_transfer_files   = YES
 when_to_transfer_output = ON_EXIT
 
-# HTCondor transfers images/ to the execute node's local SSD.
-# Sparse model .bin files are fetched from NFS by the script at job start.
-# Relative path preserves directory structure in sandbox (sparse/1 → sandbox/sparse/1/)
-# Absolute path would drop to basename only (sparse/1 → sandbox/1/) — don't use absolute here
-transfer_input_files = sparse/1
+# All inputs transferred to execute node SSD — eliminates NFS reads during the job.
+# HTCondor places each item at sandbox root using its basename:
+#   colmap.sif                   → $SANDBOX/colmap.sif      (no NFS copy in script)
+#   sparse/1/cameras.bin         → $SANDBOX/cameras.bin
+#   sparse/1/images.bin          → $SANDBOX/images.bin
+#   sparse/1/points3D.bin        → $SANDBOX/points3D.bin
+#   sparse/1/images/             → $SANDBOX/images/
+# Script sets SPARSE_DIR=$SANDBOX so image_undistorter finds everything at sandbox root.
+# NFS fallbacks remain in the script in case the cluster .bin-skip quirk still applies.
+transfer_input_files = \
+    /cluster/research-groups/wehrwein/zoo/containers/colmap.sif, \
+    sparse/1/cameras.bin, \
+    sparse/1/images.bin, \
+    sparse/1/points3D.bin, \
+    sparse/1/images
 
 # Transfer back only the final outputs
 transfer_output_files = dense/fused.ply, dense/meshed-poisson.ply
