@@ -4,12 +4,6 @@ arguments = ./sparse/1
 
 initialdir = /cluster/research-groups/wehrwein/zoo/konnor/colmap/zoo_reconstruction/colmap/manual_registration
 
-# Targeting the CS H100 node — Wehrwein group has Slot 1 priority
-# H100: 80 GB VRAM, max 16 CPUs, ~502 GB RAM
-+WantH100 = True
-+WantPreempt = True
-gpus_minimum_memory = 80000
-
 request_cpus = 16
 request_memory = 96GB
 request_gpus = 1
