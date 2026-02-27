@@ -1,71 +1,62 @@
 #!/bin/bash
 set -e
 
-# Dense reconstruction from a prepared COLMAP MVS workspace.
-# Cleans up any previous run's intermediate files before starting.
+# Dense reconstruction from a COLMAP sparse model + undistorted images.
+# Usage: ./pipeline_dense.sh <sparse_dir> [dense_output_dir]
 #
-# Usage: ./pipeline_dense.sh <workspace_dir> [dense_output_dir]
-#
-# <workspace_dir>   path to the COLMAP workspace produced by image_undistorter
-#                   (must contain images/, sparse/, stereo/patch-match.cfg)
-# [dense_output_dir] optional override for output; defaults to <workspace_dir>
+# <sparse_dir>       directory containing cameras.bin, images.bin,
+#                    points3D.bin, and an images/ subfolder
+# [dense_output_dir] defaults to ./dense
 
 # Container setup
 LOCAL_CONTAINER="/tmp/colmap_$$.sif"
 cp /cluster/research-groups/wehrwein/zoo/containers/colmap.sif "$LOCAL_CONTAINER"
 CONTAINER="$LOCAL_CONTAINER"
-colmap() {
-    apptainer exec --nv "$CONTAINER" colmap "$@"
-}
+colmap() { apptainer exec --nv "$CONTAINER" colmap "$@"; }
 
-WORKSPACE="${1:?Usage: $0 <workspace_dir>}"
-DENSE_DIR="${2:-$WORKSPACE}"
+SPARSE_DIR="${1:?Usage: $0 <sparse_dir> [dense_output_dir]}"
+DENSE_DIR="${2:-./dense}"
 
 echo "============================================================================"
-echo "Dense Reconstruction Pipeline (max quality)"
-echo "  workspace : $WORKSPACE"
-echo "  output    : $DENSE_DIR"
+echo "Dense Reconstruction Pipeline"
+echo "  sparse : $SPARSE_DIR"
+echo "  output : $DENSE_DIR"
 echo "============================================================================"
 
-# Guard: sparse/ subdir must have a valid camera model — if missing, the job
-# was likely submitted before committing sparse/1/sparse/*.bin to git.
-if [ ! -f "$WORKSPACE/sparse/cameras.bin" ]; then
-    echo ""
-    echo "ERROR: $WORKSPACE/sparse/cameras.bin not found."
-    echo "Commit sparse/1/sparse/*.bin to git and re-push before submitting."
+# Sanity check
+if [ ! -f "$SPARSE_DIR/cameras.bin" ]; then
+    echo "ERROR: $SPARSE_DIR/cameras.bin not found."
+    exit 1
+fi
+if [ ! -d "$SPARSE_DIR/images" ]; then
+    echo "ERROR: $SPARSE_DIR/images/ not found."
     exit 1
 fi
 
-# Wipe previous run's intermediates so we always start clean
+# Start clean — wipe any previous dense output
 echo ""
-echo "=== [1/3] Cleaning up previous outputs ==="
-# Ensure stereo subdirs exist (HTCondor doesn't transfer empty directories)
-mkdir -p "$WORKSPACE/stereo/depth_maps" \
-         "$WORKSPACE/stereo/normal_maps" \
-         "$WORKSPACE/stereo/consistency_graphs"
-rm -f  "$WORKSPACE/stereo/depth_maps"/*.bin \
-       "$WORKSPACE/stereo/depth_maps"/*.jpg \
-       "$WORKSPACE/stereo/depth_maps"/*.png
-rm -f  "$WORKSPACE/stereo/normal_maps"/*.bin \
-       "$WORKSPACE/stereo/normal_maps"/*.jpg \
-       "$WORKSPACE/stereo/normal_maps"/*.png
-rm -f  "$WORKSPACE/stereo/consistency_graphs"/*.bin
-rm -f  "$DENSE_DIR/fused.ply"
-rm -f  "$DENSE_DIR/meshed-poisson.ply"
-echo "    done."
+echo "=== [1/4] Preparing workspace ==="
+rm -rf "$DENSE_DIR"
+mkdir -p "$DENSE_DIR"
 
-# Step 2 — patch match stereo (GPU)
-#   window_radius=5       patch size (5 = fine detail, larger = smoother)
-#   window_step=1         sample every pixel (max density)
-#   num_samples=20        random hypotheses per pixel
-#   num_iterations=8      propagation iterations
-#   geom_consistency=1    cross-view depth consistency check
-#   filter_min_num_consistent=2  keep points seen in >=2 views
-#   cache_size=64         raise from 32 to use available RAM
+# Step 2 — undistort images and build stereo workspace
+#   cameras are already pinhole so this is mainly generating patch-match.cfg
+#   num_patch_match_src_images=40  more source views -> better depth estimates
 echo ""
-echo "=== [2/3] Patch match stereo (MVS) ==="
+echo "=== [2/4] Image undistortion ==="
+colmap image_undistorter \
+    --image_path    "$SPARSE_DIR/images" \
+    --input_path    "$SPARSE_DIR" \
+    --output_path   "$DENSE_DIR" \
+    --output_type   COLMAP \
+    --max_image_size -1 \
+    --num_patch_match_src_images 40
+
+# Step 3 — patch match stereo (GPU)
+echo ""
+echo "=== [3/4] Patch match stereo (MVS) ==="
 colmap patch_match_stereo \
-    --workspace_path "$WORKSPACE" \
+    --workspace_path "$DENSE_DIR" \
     --workspace_format COLMAP \
     --PatchMatchStereo.max_image_size -1 \
     --PatchMatchStereo.window_radius 5 \
@@ -81,17 +72,11 @@ colmap patch_match_stereo \
     --PatchMatchStereo.filter_min_num_consistent 2 \
     --PatchMatchStereo.cache_size 64
 
-# Step 3 — fuse depth maps into dense point cloud
-#   min_num_pixels=3      keep points visible in >=3 views (more complete)
-#   max_reproj_error=1    tight reprojection filter (more accurate)
-#   max_depth_error=0.01  tight depth consistency
-#   max_normal_error=10   normal consistency threshold
-#   check_num_images=50   check consistency across up to 50 images
-#   cache_size=64         raise from 32
+# Step 4 — fuse depth maps + mesh
 echo ""
-echo "=== [3/3] Stereo fusion + Poisson mesh ==="
+echo "=== [4/4] Stereo fusion + Poisson mesh ==="
 colmap stereo_fusion \
-    --workspace_path "$WORKSPACE" \
+    --workspace_path "$DENSE_DIR" \
     --workspace_format COLMAP \
     --input_type geometric \
     --output_path "$DENSE_DIR/fused.ply" \
@@ -105,14 +90,8 @@ colmap stereo_fusion \
     --StereoFusion.check_num_images 50 \
     --StereoFusion.cache_size 64
 
-# Step 4 — Poisson mesh
-#   depth=14              octree depth for mesh resolution
-#   trim=7                trim loose surfaces
-#   num_threads=-1        use all available cores
-echo ""
-echo "=== Poisson meshing ==="
 colmap poisson_mesher \
-    --input_path "$DENSE_DIR/fused.ply" \
+    --input_path  "$DENSE_DIR/fused.ply" \
     --output_path "$DENSE_DIR/meshed-poisson.ply" \
     --PoissonMeshing.depth 14 \
     --PoissonMeshing.point_weight 1 \
@@ -121,9 +100,9 @@ colmap poisson_mesher \
 
 echo ""
 echo "============================================================================"
-echo "Dense reconstruction complete!"
-echo "  fused point cloud : $DENSE_DIR/fused.ply"
-echo "  mesh              : $DENSE_DIR/meshed-poisson.ply"
+echo "Done!"
+echo "  point cloud : $DENSE_DIR/fused.ply"
+echo "  mesh        : $DENSE_DIR/meshed-poisson.ply"
 echo "============================================================================"
 
 rm -f "$LOCAL_CONTAINER"

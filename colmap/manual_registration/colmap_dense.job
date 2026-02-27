@@ -1,25 +1,23 @@
 universe = vanilla
 executable = pipeline_dense.sh
-arguments = ./sparse/1
+arguments  = ./sparse/1
 
 initialdir = /cluster/research-groups/wehrwein/zoo/konnor/colmap/zoo_reconstruction/colmap/manual_registration
 
-request_cpus = 16
+request_cpus   = 16
 request_memory = 96GB
-request_gpus = 1
-request_disk = 200GB
+request_gpus   = 1
+request_disk   = 200GB
 
-# HTCondor copies everything from NFS to execute node's local SSD once at start,
-# then COLMAP runs entirely on /scratch_ssd — no NFS load during compute.
-should_transfer_files = YES
+should_transfer_files   = YES
 when_to_transfer_output = ON_EXIT
 
-# sparse/1 must exist on cluster NFS first — rsync it before submitting:
-#   rsync -avz sparse/1/ kooik2@csci-head:...initialdir/sparse/1/
-transfer_input_files = sparse/1
+# sparse/1/ must contain: cameras.bin, images.bin, points3D.bin, images/
+# rsync it to the cluster before submitting if not already there
+transfer_input_files   = sparse/1
 
-# Only copy back the final outputs — depth/normal maps stay on execute node
-transfer_output_files = sparse/1/fused.ply, sparse/1/meshed-poisson.ply
+# dense/ is created fresh on the execute node — only transfer back final outputs
+transfer_output_files  = dense/fused.ply, dense/meshed-poisson.ply
 
 output = logs/dense_output.log
 error  = logs/dense_error.log
