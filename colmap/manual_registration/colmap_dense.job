@@ -13,15 +13,16 @@ when_to_transfer_output = ON_EXIT
 
 # HTCondor transfers images/ to the execute node's local SSD.
 # Sparse model .bin files are fetched from NFS by the script at job start.
-transfer_input_files = /cluster/research-groups/wehrwein/zoo/konnor/colmap/zoo_reconstruction/colmap/manual_registration/sparse/1
+# Relative path preserves directory structure in sandbox (sparse/1 → sandbox/sparse/1/)
+# Absolute path would drop to basename only (sparse/1 → sandbox/1/) — don't use absolute here
+transfer_input_files = sparse/1
 
 # Transfer back only the final outputs
 transfer_output_files = dense/fused.ply, dense/meshed-poisson.ply
-transfer_output_remaps = "dense/fused.ply = sparse/1/fused.ply; dense/meshed-poisson.ply = sparse/1/meshed-poisson.ply"
 
-output = /cluster/research-groups/wehrwein/zoo/konnor/colmap/zoo_reconstruction/colmap/manual_registration/logs/dense_output.log
-error  = /cluster/research-groups/wehrwein/zoo/konnor/colmap/zoo_reconstruction/colmap/manual_registration/logs/dense_error.log
-log    = /cluster/research-groups/wehrwein/zoo/konnor/colmap/zoo_reconstruction/colmap/manual_registration/logs/dense_condor.log
+output = logs/dense_output.log
+error  = logs/dense_error.log
+log    = logs/dense_condor.log
 
 getenv = False
 
