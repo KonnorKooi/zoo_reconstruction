@@ -104,21 +104,21 @@ colmap stereo_fusion \
     --input_type geometric \
     --output_path "$DENSE_DIR/fused.ply" \
     --StereoFusion.max_image_size -1 \
-    --StereoFusion.min_num_pixels 3 \
+    --StereoFusion.min_num_pixels 2 \
     --StereoFusion.max_num_pixels 10000 \
     --StereoFusion.max_traversal_depth 100 \
-    --StereoFusion.max_reproj_error 1 \
-    --StereoFusion.max_depth_error 0.01 \
-    --StereoFusion.max_normal_error 10 \
+    --StereoFusion.max_reproj_error 3 \
+    --StereoFusion.max_depth_error 0.05 \
+    --StereoFusion.max_normal_error 20 \
     --StereoFusion.check_num_images 50 \
     --StereoFusion.cache_size 64
 
 colmap poisson_mesher \
     --input_path  "$DENSE_DIR/fused.ply" \
     --output_path "$DENSE_DIR/meshed-poisson.ply" \
-    --PoissonMeshing.depth 14 \
+    --PoissonMeshing.depth 11 \
     --PoissonMeshing.point_weight 1 \
-    --PoissonMeshing.trim 7 \
+    --PoissonMeshing.trim 5 \
     --PoissonMeshing.num_threads -1
 
 echo ""
