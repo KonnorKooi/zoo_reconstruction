@@ -86,10 +86,12 @@ colmap patch_match_stereo \
 echo ""
 echo "=== [3/3] Stereo fusion + Poisson mesh ==="
 colmap stereo_fusion \
-    --workspace_path   "$DENSE_DIR" \
-    --workspace_format COLMAP \
-    --input_type       geometric \
-    --output_path      "$DENSE_DIR/fused.ply"
+    --workspace_path                      "$DENSE_DIR" \
+    --workspace_format                    COLMAP \
+    --input_type                          geometric \
+    --StereoFusion.max_depth_error        0.05 \
+    --StereoFusion.num_consistent_views   2 \
+    --output_path                         "$DENSE_DIR/fused.ply"
 
 colmap poisson_mesher \
     --input_path  "$DENSE_DIR/fused.ply" \
