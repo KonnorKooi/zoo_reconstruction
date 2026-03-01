@@ -68,41 +68,25 @@ mkdir -p "$DENSE_DIR"
 echo ""
 echo "=== [1/3] Image undistortion ==="
 colmap image_undistorter \
-    --image_path    "$SPARSE_DIR/images" \
-    --input_path    "$SPARSE_DIR" \
-    --output_path   "$DENSE_DIR" \
-    --output_type   COLMAP \
-    --max_image_size -1 \
-    --num_patch_match_src_images 40
+    --image_path  "$SPARSE_DIR/images" \
+    --input_path  "$SPARSE_DIR" \
+    --output_path "$DENSE_DIR" \
+    --output_type COLMAP
 
 # ── [2/3] Patch match stereo (GPU) ────────────────────────────────────────────
 echo ""
 echo "=== [2/3] Patch match stereo (MVS) ==="
 colmap patch_match_stereo \
-    --workspace_path "$DENSE_DIR" \
-    --workspace_format COLMAP \
-    --PatchMatchStereo.max_image_size -1 \
-    --PatchMatchStereo.window_radius 5 \
-    --PatchMatchStereo.window_step 1 \
-    --PatchMatchStereo.num_samples 20 \
-    --PatchMatchStereo.num_iterations 8 \
-    --PatchMatchStereo.geom_consistency 1 \
-    --PatchMatchStereo.geom_consistency_regularizer 0.3 \
-    --PatchMatchStereo.geom_consistency_max_cost 3 \
-    --PatchMatchStereo.filter 1 \
-    --PatchMatchStereo.filter_min_ncc 0.1 \
-    --PatchMatchStereo.filter_min_triangulation_angle 3 \
-    --PatchMatchStereo.filter_min_num_consistent 2 \
-    --PatchMatchStereo.cache_size 64
+    --workspace_path   "$DENSE_DIR" \
+    --workspace_format COLMAP
 
 # ── [3/3] Stereo fusion + Poisson mesh ────────────────────────────────────────
 echo ""
 echo "=== [3/3] Stereo fusion + Poisson mesh ==="
 colmap stereo_fusion \
-    --workspace_path "$DENSE_DIR" \
+    --workspace_path   "$DENSE_DIR" \
     --workspace_format COLMAP \
-    --input_type geometric \
-    --output_path "$DENSE_DIR/fused.ply"
+    --output_path      "$DENSE_DIR/fused.ply"
 
 colmap poisson_mesher \
     --input_path  "$DENSE_DIR/fused.ply" \
