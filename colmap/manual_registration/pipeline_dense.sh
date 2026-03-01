@@ -86,6 +86,7 @@ echo "=== [3/3] Stereo fusion + Poisson mesh ==="
 colmap stereo_fusion \
     --workspace_path   "$DENSE_DIR" \
     --workspace_format COLMAP \
+    --input_type       geometric \
     --output_path      "$DENSE_DIR/fused.ply"
 
 colmap poisson_mesher \
