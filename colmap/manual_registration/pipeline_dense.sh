@@ -77,8 +77,10 @@ colmap image_undistorter \
 echo ""
 echo "=== [2/3] Patch match stereo (MVS) ==="
 colmap patch_match_stereo \
-    --workspace_path   "$DENSE_DIR" \
-    --workspace_format COLMAP
+    --workspace_path                         "$DENSE_DIR" \
+    --workspace_format                       COLMAP \
+    --PatchMatchStereo.max_image_size        2000 \
+    --PatchMatchStereo.geom_consistency      false
 
 # ── [3/3] Stereo fusion + Poisson mesh ────────────────────────────────────────
 echo ""
@@ -86,7 +88,7 @@ echo "=== [3/3] Stereo fusion + Poisson mesh ==="
 colmap stereo_fusion \
     --workspace_path   "$DENSE_DIR" \
     --workspace_format COLMAP \
-    --input_type       geometric \
+    --input_type       photometric \
     --output_path      "$DENSE_DIR/fused.ply"
 
 colmap poisson_mesher \
